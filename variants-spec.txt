@@ -1,0 +1,596 @@
+#### EDIT imports replace
+---- OLD
+} from 'lucide-react'
+---- NEW
+} from 'lucide-react'
+import { VariantEditor, parseOptions, isSizeName } from '@/components/variant-editor'
+#### EDIT product-type replace
+---- OLD
+  optionPrice?: Record<string, number>
+}
+
+interface CartLine {
+---- NEW
+  optionPrice?: Record<string, number>
+  comboStock?: Record<string, number>
+  comboPrice?: Record<string, number>
+}
+
+interface CartLine {
+#### EDIT helpers replace
+---- OLD
+const stockFor = (p: Product, sel: Record<string, string>) =>
+  Object.entries(sel).reduce((m, [g, o]) => {
+    const st = p.optionStock?.[optKey(g, o)]
+    return st === undefined ? m : Math.min(m, st)
+  }, p.stock)
+const unitPrice = (p: Product, sel: Record<string, string>) =>
+  Object.entries(sel).reduce((pr, [g, o]) => p.optionPrice?.[optKey(g, o)] ?? pr, p.price)
+const topPrice = (p: Product) => Math.max(p.price, ...Object.values(p.optionPrice ?? {}))
+---- NEW
+const MAX_COMBOS = 100
+const comboKey = (p: Product, sel: Record<string, string>) => p.variants.map((g) => optKey(g.name, sel[g.name] ?? '')).join('::')
+const isCombo = (p: Product) => p.variants.length > 1 && !!p.comboStock
+const comboList = (p: Product) =>
+  p.variants.reduce<Record<string, string>[]>((acc, g) => acc.flatMap((a) => g.options.map((o) => ({ ...a, [g.name]: o }))), [{}])
+const comboMatches = (p: Product, sel: Record<string, string>) =>
+  comboList(p).filter((c) => Object.entries(sel).every(([g, o]) => c[g] === undefined || c[g] === o))
+const stockFor = (p: Product, sel: Record<string, string>) => {
+  if (isCombo(p)) return comboMatches(p, sel).reduce((s, c) => s + (p.comboStock?.[comboKey(p, c)] ?? 0), 0)
+  return Object.entries(sel).reduce((m, [g, o]) => {
+    const st = p.optionStock?.[optKey(g, o)]
+    return st === undefined ? m : Math.min(m, st)
+  }, p.stock)
+}
+const unitPrice = (p: Product, sel: Record<string, string>) => {
+  if (isCombo(p)) {
+    const v = p.comboPrice?.[comboKey(p, sel)]
+    if (v !== undefined) return v
+  }
+  return Object.entries(sel).reduce((pr, [g, o]) => p.optionPrice?.[optKey(g, o)] ?? pr, p.price)
+}
+const topPrice = (p: Product) => Math.max(p.price, ...Object.values(p.optionPrice ?? {}), ...Object.values(p.comboPrice ?? {}))
+const priceSpan = (p: Product, sel: Record<string, string>): [number, number] => {
+  if (!isCombo(p)) {
+    const v = unitPrice(p, sel)
+    return [v, v]
+  }
+  const ps = comboMatches(p, sel).map((c) => p.comboPrice?.[comboKey(p, c)] ?? p.price)
+  return ps.length ? [Math.min(...ps), Math.max(...ps)] : [p.price, p.price]
+}
+const optionUnavailable = (p: Product, sel: Record<string, string>, group: string, option: string) =>
+  isCombo(p) ? stockFor(p, { ...sel, [group]: option }) === 0 : optionSoldOut(p, group, option)
+const optionStockHint = (p: Product, sel: Record<string, string>, group: string, option: string): number | undefined =>
+  isCombo(p) ? stockFor(p, { ...sel, [group]: option }) : p.optionStock?.[optKey(group, option)]
+const pickMessage = (names: string[]) =>
+  `請先選擇${[...names].sort((a, b) => Number(isSizeName(b)) - Number(isSizeName(a))).join('與')}`
+const fmtOpt = (o: string) => (/^(XXS|XS|S|M|L|XL|[2-5]XL)$/i.test(o) ? `${o.toUpperCase()}號` : o)
+#### EDIT cart-missing replace
+---- OLD
+    const key = `${pid}|${JSON.stringify(variant)}`
+---- NEW
+    const missingGroups = product.variants.filter((g) => !variant[g.name])
+    if (missingGroups.length) {
+      notify(pickMessage(missingGroups.map((g) => g.name)))
+      return false
+    }
+    const key = `${pid}|${JSON.stringify(variant)}`
+#### EDIT cart-samecombo replace
+---- OLD
+    const inCartSameProduct = cart.filter((l) => l.productId === pid && l.key !== key).reduce((s, l) => s + l.qty, 0)
+---- NEW
+    const inCartSameProduct = isCombo(product) ? 0 : cart.filter((l) => l.productId === pid && l.key !== key).reduce((s, l) => s + l.qty, 0)
+#### EDIT deduct-combo replace
+---- OLD
+        const optionStock = pr.optionStock ? { ...pr.optionStock } : undefined
+---- NEW
+        const comboStock = pr.comboStock ? { ...pr.comboStock } : undefined
+        if (comboStock) {
+          cart
+            .filter((l) => orderedKeys.has(l.key) && l.productId === pr.id)
+            .forEach((l) => {
+              const k = comboKey(pr, l.variant)
+              if (comboStock[k] !== undefined) comboStock[k] = Math.max(0, comboStock[k] - l.qty)
+            })
+        }
+        const optionStock = pr.optionStock ? { ...pr.optionStock } : undefined
+#### EDIT deduct-return replace
+---- OLD
+        return { ...pr, stock: Math.max(0, pr.stock - qty), sold: pr.sold + qty, optionStock }
+---- NEW
+        return { ...pr, stock: Math.max(0, pr.stock - qty), sold: pr.sold + qty, optionStock, comboStock }
+#### EDIT modal-props-destructure replace
+---- OLD
+  onOpenSimilar,
+}: {
+  product: Product
+  seller: Seller
+---- NEW
+  onOpenSimilar,
+  onNotify,
+}: {
+  product: Product
+  seller: Seller
+#### EDIT modal-props-type replace
+---- OLD
+  onOpenSimilar?: (id: string) => void
+}) {
+  const [reportOpen, setReportOpen] = useState(false)
+---- NEW
+  onOpenSimilar?: (id: string) => void
+  onNotify?: (msg: string) => void
+}) {
+  const [reportOpen, setReportOpen] = useState(false)
+#### EDIT modal-state replace
+---- OLD
+  const [sel, setSel] = useState<Record<string, string>>(() =>
+    Object.fromEntries(product.variants.map((v) => [v.name, v.options.find((o) => !optionSoldOut(product, v.name, o)) ?? v.options[0]])),
+  )
+  const rating = avg(product.reviews)
+  const limit = stockFor(product, sel)
+  const soldOut = limit === 0
+  const shownPrice = unitPrice(product, sel)
+---- NEW
+  const [sel, setSel] = useState<Record<string, string>>(() =>
+    Object.fromEntries(product.variants.filter((v) => v.options.length === 1).map((v) => [v.name, v.options[0]])),
+  )
+  const [needPick, setNeedPick] = useState(false)
+  const variantsRef = useRef<HTMLDivElement>(null)
+  const rating = avg(product.reviews)
+  const missing = product.variants.filter((g) => !sel[g.name])
+  const complete = missing.length === 0
+  const limit = stockFor(product, sel)
+  const soldOut = limit === 0
+  const [priceMin, priceMax] = priceSpan(product, sel)
+  const shownPrice = priceMin
+  const pickedLabel = product.variants.map((g) => sel[g.name]).filter(Boolean).map(fmtOpt).join(' / ')
+  const tryBuy = (action: (variant: Record<string, string>, qty: number) => void) => {
+    if (!complete) {
+      setNeedPick(true)
+      onNotify?.(pickMessage(missing.map((g) => g.name)))
+      variantsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+    action(sel, qty)
+  }
+#### EDIT modal-price replace
+---- OLD
+text-3xl font-black text-brand-ink">{money(shownPrice)}</p>
+---- NEW
+text-3xl font-black text-brand-ink">
+            {!complete && priceMax > priceMin ? `${money(priceMin)} – ${money(priceMax)}` : money(shownPrice)}
+          </p>
+#### EDIT modal-variants between
+---- OLD
+          {product.variants.map((g) => (
+            <div key={g.name}>
+---- END
+          <div className="flex flex-wrap items-center gap-4">
+---- NEW
+          {product.variants.length > 0 && (
+            <div ref={variantsRef} className="scroll-mt-4 space-y-3">
+              {product.variants.map((g) => {
+                const groupMissing = needPick && !sel[g.name]
+                return (
+                  <div key={g.name} role="group" aria-label={g.name}>
+                    <p className={`mb-1.5 text-xs font-bold ${groupMissing ? 'text-destructive' : 'text-muted-foreground'}`}>
+                      {g.name}
+                      {sel[g.name] ? (
+                        <span className="ml-1.5 text-foreground">{fmtOpt(sel[g.name])}</span>
+                      ) : (
+                        <span className="ml-1.5 font-medium">（請選擇）</span>
+                      )}
+                    </p>
+                    <div className={`flex flex-wrap gap-2 rounded-2xl ${groupMissing ? 'ring-2 ring-destructive/50 ring-offset-2 ring-offset-background' : ''}`}>
+                      {g.options.map((o) => {
+                        const out = optionUnavailable(product, sel, g.name, o)
+                        const left = optionStockHint(product, sel, g.name, o)
+                        const low = !out && left !== undefined && left <= 5
+                        const active = sel[g.name] === o
+                        return (
+                          <button
+                            key={o}
+                            type="button"
+                            disabled={out}
+                            aria-pressed={active}
+                            aria-label={out ? `${o}（缺貨）` : low ? `${o}（剩 ${left} 件）` : o}
+                            onClick={() => {
+                              setSel({ ...sel, [g.name]: o })
+                              setQty(1)
+                            }}
+                            className={`flex min-w-14 flex-col items-center rounded-xl border-2 px-3.5 py-2 text-sm font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                              out
+                                ? 'cursor-not-allowed border-dashed border-border bg-muted text-muted-foreground/60'
+                                : active
+                                  ? 'border-primary bg-accent text-accent-foreground'
+                                  : 'border-border bg-card hover:border-primary/60'
+                            }`}
+                          >
+                            <span className={out ? 'line-through' : ''}>{fmtOpt(o)}</span>
+                            {out && <span className="text-[10px] font-bold">缺貨</span>}
+                            {low && <span className="text-[10px] font-bold text-destructive">剩 {left} 件</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+              {needPick && !complete && (
+                <p role="alert" className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-sm font-bold text-destructive">
+                  <CircleAlert className="size-4 shrink-0" />
+                  {pickMessage(missing.map((g) => g.name))}
+                </p>
+              )}
+            </div>
+          )}
+
+#### EDIT modal-stocktext replace
+---- OLD
+              {soldOut ? '此規格目前無庫存' : `庫存 ${limit} 件`}
+---- NEW
+              {soldOut
+                ? `${pickedLabel ? `${pickedLabel} ` : ''}目前無庫存`
+                : product.variants.length === 0 || complete
+                  ? `${pickedLabel ? `${pickedLabel} ` : ''}庫存剩 ${limit} 件`
+                  : pickedLabel
+                    ? `${pickedLabel} 合計庫存剩 ${limit} 件`
+                    : `總庫存 ${limit} 件，請先選擇規格`}
+#### EDIT modal-addbtn replace
+---- OLD
+            <button type="button" disabled={soldOut} onClick={() => onAdd(sel, qty)} className={`${btnGhost} flex-1 py-3 text-brand-ink`}>
+---- NEW
+            <button type="button" disabled={soldOut} onClick={() => tryBuy(onAdd)} className={`${btnGhost} flex-1 py-3 text-brand-ink`}>
+#### EDIT modal-buybtn replace
+---- OLD
+            <button type="button" disabled={soldOut} onClick={() => onBuyNow(sel, qty)} className={`${btnPrimary} flex-1`}>
+---- NEW
+            <button type="button" disabled={soldOut} onClick={() => tryBuy(onBuyNow)} className={`${btnPrimary} flex-1`}>
+#### EDIT callsite-notify replace
+---- OLD
+          onClose={() => setProductId(null)}
+          onAdd={(v, q) => {
+---- NEW
+          onClose={() => setProductId(null)}
+          onNotify={notify}
+          onAdd={(v, q) => {
+#### EDIT form-state replace
+---- OLD
+  const [options, setOptions] = useState(product?.variants[0]?.options.join('、') ?? '標準款')
+---- NEW
+  const [options, setOptions] = useState(product?.variants[0]?.options.join('、') ?? '標準款')
+  const [useSecond, setUseSecond] = useState((product?.variants.length ?? 0) > 1)
+  const [variantName2, setVariantName2] = useState(product?.variants[1]?.name ?? '尺寸')
+  const [options2, setOptions2] = useState(product?.variants[1]?.options.join('、') ?? '')
+  const [comboStockIn, setComboStockIn] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(product?.comboStock ?? {}).map(([k, v]) => [k, String(v)])),
+  )
+  const [comboPriceIn, setComboPriceIn] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(product?.comboPrice ?? {}).map(([k, v]) => [k, String(v)])),
+  )
+  const [bulkStock, setBulkStock] = useState('')
+  const [bulkPrice, setBulkPrice] = useState('')
+  const specTouched = useRef(!!product)
+  const autoPreset = useRef(false)
+#### EDIT form-banned replace
+---- OLD
+  const bannedHits = scanBanned(name, desc, specs, options, variantName)
+---- NEW
+  const bannedHits = scanBanned(name, desc, specs, options, variantName, useSecond ? options2 : '', useSecond ? variantName2 : '')
+#### EDIT form-derived replace
+---- OLD
+  const optList = options.split(/[、,，]/).map((o) => o.trim()).filter(Boolean)
+  const topPriceN = Math.max(Number(price) || 0, ...optList.map((o) => Number(optPrice[o]) || 0))
+---- NEW
+  const optList = parseOptions(options)
+  const optList2 = useSecond ? parseOptions(options2) : []
+  const gName1 = variantName.trim() || '規格'
+  const gName2 = variantName2.trim() || '規格二'
+  const comboRows = useSecond
+    ? optList.flatMap((a) => optList2.map((b) => ({ a, b, key: `${optKey(gName1, a)}::${optKey(gName2, b)}` })))
+    : []
+  const comboTotal = comboRows.reduce((s, r) => s + (Number(comboStockIn[r.key]) || 0), 0)
+  const sizeFamily = ['fashion', 'bags'].includes(familyOfMain(category)?.id ?? '')
+  const topPriceN = Math.max(
+    Number(price) || 0,
+    ...optList.map((o) => Number(optPrice[o]) || 0),
+    ...comboRows.map((r) => Number(comboPriceIn[r.key]) || 0),
+  )
+  const applyApparel = () => {
+    setVariantName('顏色/款式')
+    setUseSecond(true)
+    setVariantName2('尺寸')
+    if (options === '標準款') setOptions('')
+    if (!options2.trim()) setOptions2('S、M、L、XL')
+  }
+  const applyBulk = () => {
+    if (bulkStock !== '') setComboStockIn((m) => ({ ...m, ...Object.fromEntries(comboRows.map((r) => [r.key, bulkStock])) }))
+    if (bulkPrice !== '') setComboPriceIn((m) => ({ ...m, ...Object.fromEntries(comboRows.map((r) => [r.key, bulkPrice])) }))
+  }
+#### EDIT form-validate replace
+---- OLD
+    if (!Number.isInteger(stockN) || stockN < 0) e.stock = '請輸入 0 以上的整數庫存'
+    const opts = options.split(/[、,，]/).map((s) => s.trim()).filter(Boolean)
+    if (opts.length === 0) e.options = '至少需要一個規格選項'
+    if (opts.some((o) => Number(optPrice[o] || 0) > MAX_PRICE)) e.options = PRICE_LIMIT_MSG
+---- NEW
+    if (!useSecond && (!Number.isInteger(stockN) || stockN < 0)) e.stock = '請輸入 0 以上的整數庫存'
+    const opts = optList
+    if (opts.length === 0) e.options = '至少需要一個規格選項'
+    if (!useSecond && opts.some((o) => Number(optPrice[o] || 0) > MAX_PRICE)) e.options = PRICE_LIMIT_MSG
+    if (useSecond) {
+      if (optList2.length === 0) e.options2 = '第二規格至少需要一個選項'
+      if (gName1 === gName2) e.options2 = '兩個規格名稱不可相同'
+      if (comboRows.length > MAX_COMBOS) e.combos = `組合數量上限 ${MAX_COMBOS} 組，請減少規格選項`
+      else if (comboRows.some((r) => (comboStockIn[r.key] ?? '') === '')) e.combos = '請填寫每個組合的庫存（沒有庫存請填 0）'
+      if (comboRows.some((r) => Number(comboPriceIn[r.key] || 0) > MAX_PRICE)) e.combos = PRICE_LIMIT_MSG
+    }
+#### EDIT form-build replace
+---- OLD
+    const gName = variantName.trim() || '規格'
+    const optionStock: Record<string, number> = {}
+    const optionPrice: Record<string, number> = {}
+    opts.forEach((o) => {
+      if ((optStock[o] ?? '') !== '') optionStock[optKey(gName, o)] = Number(optStock[o])
+      if (optPrice[o]) optionPrice[optKey(gName, o)] = Number(optPrice[o])
+    })
+    const allStocked = opts.every((o) => optionStock[optKey(gName, o)] !== undefined)
+    const finalStock = allStocked ? opts.reduce((sum, o) => sum + optionStock[optKey(gName, o)], 0) : stockN
+    const top = Math.max(priceN, ...Object.values(optionPrice))
+---- NEW
+    const gName = gName1
+    const optionStock: Record<string, number> = {}
+    const optionPrice: Record<string, number> = {}
+    const comboStock: Record<string, number> = {}
+    const comboPrice: Record<string, number> = {}
+    if (useSecond) {
+      comboRows.forEach((r) => {
+        comboStock[r.key] = Number(comboStockIn[r.key])
+        if (comboPriceIn[r.key]) comboPrice[r.key] = Number(comboPriceIn[r.key])
+      })
+    } else {
+      opts.forEach((o) => {
+        if ((optStock[o] ?? '') !== '') optionStock[optKey(gName, o)] = Number(optStock[o])
+        if (optPrice[o]) optionPrice[optKey(gName, o)] = Number(optPrice[o])
+      })
+    }
+    const allStocked = !useSecond && opts.every((o) => optionStock[optKey(gName, o)] !== undefined)
+    const finalStock = useSecond
+      ? Object.values(comboStock).reduce((sum, n) => sum + n, 0)
+      : allStocked
+        ? opts.reduce((sum, o) => sum + optionStock[optKey(gName, o)], 0)
+        : stockN
+    const top = Math.max(priceN, ...Object.values(optionPrice), ...Object.values(comboPrice))
+#### EDIT form-variants-field replace
+---- OLD
+      variants: [{ name: variantName.trim() || '規格', options: opts }],
+---- NEW
+      variants: useSecond ? [{ name: gName1, options: opts }, { name: gName2, options: optList2 }] : [{ name: gName1, options: opts }],
+#### EDIT form-combo-fields replace
+---- OLD
+      optionPrice: Object.keys(optionPrice).length ? optionPrice : undefined,
+    })
+---- NEW
+      optionPrice: Object.keys(optionPrice).length ? optionPrice : undefined,
+      comboStock: Object.keys(comboStock).length ? comboStock : undefined,
+      comboPrice: Object.keys(comboPrice).length ? comboPrice : undefined,
+    })
+#### EDIT form-category replace
+---- OLD
+              onChange={(e) => {
+                setCategory(e.target.value)
+                setSubCategory(subsOfMain(e.target.value)[0] ?? '')
+              }}
+---- NEW
+              onChange={(e) => {
+                const next = e.target.value
+                setCategory(next)
+                setSubCategory(subsOfMain(next)[0] ?? '')
+                const fam = familyOfMain(next)?.id
+                const wantsSize = fam === 'fashion' || fam === 'bags'
+                if (!specTouched.current && wantsSize) {
+                  applyApparel()
+                  autoPreset.current = true
+                } else if (!specTouched.current && !wantsSize && autoPreset.current) {
+                  setVariantName('規格')
+                  setOptions('標準款')
+                  setUseSecond(false)
+                  setOptions2('')
+                  autoPreset.current = false
+                }
+              }}
+#### EDIT form-stock-field replace
+---- OLD
+          <Field label="庫存數量" error={errors.stock}>
+            <input inputMode="numeric" className={inputCls} value={stock} onChange={(e) => setStock(e.target.value.replace(/\D/g, ''))} />
+          </Field>
+---- NEW
+          <Field label={useSecond ? '總庫存（自動加總）' : '庫存數量'} error={errors.stock}>
+            <input
+              inputMode="numeric"
+              className={`${inputCls} ${useSecond ? 'bg-muted' : ''}`}
+              value={useSecond ? String(comboTotal) : stock}
+              readOnly={useSecond}
+              onChange={(e) => setStock(e.target.value.replace(/\D/g, ''))}
+            />
+          </Field>
+#### EDIT form-ui between
+---- OLD
+        <Field label="規格名稱">
+---- END
+        <div className="md:col-span-2">
+          <AiMarketingHelper
+---- NEW
+        <div className="space-y-3 md:col-span-2">
+          {sizeFamily && (
+            <div role="note" className="flex flex-wrap items-center gap-2 rounded-2xl border border-primary/30 bg-accent px-3 py-2.5 text-sm text-accent-foreground">
+              <p className="min-w-0 flex-1 text-pretty font-bold">
+                此分類建議使用「顏色/款式 × 尺寸」雙層規格，買家可分別選擇，並看到每個組合的剩餘庫存。
+              </p>
+              {!useSecond && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    specTouched.current = true
+                    applyApparel()
+                  }}
+                  className={btnGhost}
+                >
+                  套用雙層規格
+                </button>
+              )}
+            </div>
+          )}
+          <VariantEditor
+            title="規格一"
+            name={variantName}
+            onName={(v) => {
+              specTouched.current = true
+              setVariantName(v)
+            }}
+            options={options}
+            onOptions={(v) => {
+              specTouched.current = true
+              setOptions(v)
+            }}
+            suggestedNames={sizeFamily ? ['顏色/款式', '尺寸'] : []}
+            error={errors.options}
+          />
+          {useSecond ? (
+            <VariantEditor
+              title="規格二"
+              name={variantName2}
+              onName={(v) => {
+                specTouched.current = true
+                setVariantName2(v)
+              }}
+              options={options2}
+              onOptions={(v) => {
+                specTouched.current = true
+                setOptions2(v)
+              }}
+              suggestedNames={sizeFamily ? ['尺寸'] : []}
+              error={errors.options2}
+              onRemove={() => {
+                specTouched.current = true
+                setUseSecond(false)
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                specTouched.current = true
+                setUseSecond(true)
+                if (!variantName2.trim()) setVariantName2('尺寸')
+              }}
+              className={`${btnGhost} w-full`}
+            >
+              <Plus className="size-4" />新增第二層規格（例如：顏色 × 尺寸）
+            </button>
+          )}
+
+          {useSecond ? (
+            <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/30 p-3">
+              <p className="text-xs font-bold text-muted-foreground">
+                各組合庫存與售價（共 {comboRows.length} 組；庫存填 0 前台會顯示缺貨；售價留空則沿用上方售價）
+              </p>
+              {comboRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">請先為兩個規格各新增至少一個選項，系統會自動產生所有組合。</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-bold text-muted-foreground">批次庫存</span>
+                      <input inputMode="numeric" className={`${inputCls} w-24`} value={bulkStock} onChange={(e) => setBulkStock(e.target.value.replace(/\D/g, ''))} placeholder="例如 10" />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-bold text-muted-foreground">批次售價</span>
+                      <input inputMode="numeric" className={`${inputCls} w-28`} value={bulkPrice} onChange={(e) => setBulkPrice(e.target.value.replace(/\D/g, ''))} placeholder="選填" />
+                    </label>
+                    <button type="button" onClick={applyBulk} disabled={bulkStock === '' && bulkPrice === ''} className={btnGhost}>
+                      套用到全部組合
+                    </button>
+                  </div>
+                  <div className="max-h-72 overflow-auto rounded-xl border border-border bg-card">
+                    <table className="w-full min-w-96 text-sm">
+                      <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
+                        <tr>
+                          <th scope="col" className="px-3 py-2 text-left font-bold">{gName1}</th>
+                          <th scope="col" className="px-3 py-2 text-left font-bold">{gName2}</th>
+                          <th scope="col" className="w-24 px-2 py-2 text-left font-bold">庫存</th>
+                          <th scope="col" className="w-28 px-2 py-2 text-left font-bold">售價</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {comboRows.map((r) => (
+                          <tr key={r.key} className="border-t border-border/60">
+                            <td className="px-3 py-1.5 font-bold">{r.a}</td>
+                            <td className="px-3 py-1.5 font-bold">{r.b}</td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                inputMode="numeric"
+                                aria-label={`${r.a} ${r.b} 庫存`}
+                                placeholder="庫存"
+                                className={inputCls}
+                                value={comboStockIn[r.key] ?? ''}
+                                onChange={(e) => setComboStockIn((m) => ({ ...m, [r.key]: e.target.value.replace(/\D/g, '') }))}
+                              />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                inputMode="numeric"
+                                aria-label={`${r.a} ${r.b} 售價`}
+                                placeholder="售價"
+                                className={inputCls}
+                                value={comboPriceIn[r.key] ?? ''}
+                                onChange={(e) => setComboPriceIn((m) => ({ ...m, [r.key]: e.target.value.replace(/\D/g, '') }))}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-xs text-muted-foreground">目前總庫存 {comboTotal} 件，會自動加總為商品總庫存。</p>
+                </>
+              )}
+              {errors.combos && (
+                <p role="alert" className="flex items-center gap-1 text-xs font-medium text-destructive">
+                  <CircleAlert className="size-3.5" />
+                  {errors.combos}
+                </p>
+              )}
+            </div>
+          ) : (
+            optList.length > 0 && (
+              <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/30 p-3">
+                <p className="text-xs font-bold text-muted-foreground">各選項庫存與售價（庫存填 0 會在前台自動反灰；售價留空則沿用上方售價）</p>
+                <ul className="space-y-2">
+                  {optList.map((o) => (
+                    <li key={o} className="grid grid-cols-[1fr_5.5rem_6.5rem] items-center gap-2">
+                      <span className="truncate text-sm font-bold">{o}</span>
+                      <input
+                        inputMode="numeric"
+                        aria-label={`${o} 庫存`}
+                        placeholder="庫存"
+                        className={inputCls}
+                        value={optStock[o] ?? ''}
+                        onChange={(e) => setOptStock((m) => ({ ...m, [o]: e.target.value.replace(/\D/g, '') }))}
+                      />
+                      <input
+                        inputMode="numeric"
+                        aria-label={`${o} 售價`}
+                        placeholder="售價"
+                        className={inputCls}
+                        value={optPrice[o] ?? ''}
+                        onChange={(e) => setOptPrice((m) => ({ ...m, [o]: e.target.value.replace(/\D/g, '') }))}
+                      />
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted-foreground">所有選項都填寫庫存時，總庫存會自動加總。</p>
+              </div>
+            )
+          )}
+        </div>
