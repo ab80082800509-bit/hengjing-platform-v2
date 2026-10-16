@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f97316" />
+    <title>目前離線｜買個 Pay 服</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: #fff7ed;
+        color: #1f1a17;
+        font-family: system-ui, -apple-system, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        line-height: 1.6;
+      }
+      main {
+        width: 100%;
+        max-width: 380px;
+        text-align: center;
+        background: #ffffff;
+        border: 1px solid #fed7aa;
+        border-radius: 20px;
+        padding: 32px 24px;
+      }
+      img { width: 72px; height: 72px; border-radius: 18px; }
+      h1 { margin: 16px 0 8px; font-size: 20px; }
+      p { margin: 0 0 24px; color: #6b5f57; font-size: 15px; }
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 12px;
+        padding: 12px 24px;
+        background: #f97316;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:focus-visible { outline: 3px solid #1f1a17; outline-offset: 2px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/pwa-192.png" alt="買個 Pay 服" width="72" height="72" />
+      <h1>目前沒有網路連線</h1>
+      <p>請確認網路後重新整理，你的購物車與訂單都還在，連線恢復後就能繼續逛。</p>
+      <button type="button" onclick="location.reload()">重新整理</button>
+    </main>
+  </body>
+</html>

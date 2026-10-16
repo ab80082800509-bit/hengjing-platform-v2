@@ -1,0 +1,189 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-brand-ink: var(--brand-ink);
+  --color-verified: var(--verified);
+  --font-sans: var(--font-noto), 'Noto Sans TC', system-ui, sans-serif;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  color-scheme: dark;
+  --background: #18181b;
+  --foreground: #f4f4f5;
+  --card: #27272a;
+  --card-foreground: #f4f4f5;
+  --popover: #27272a;
+  --popover-foreground: #f4f4f5;
+  --primary: #f97316;
+  --primary-foreground: #1c0a02;
+  --secondary: #2d2a27;
+  --secondary-foreground: #fdba74;
+  --muted: #303034;
+  --muted-foreground: #a1a1aa;
+  --accent: #3a2c20;
+  --accent-foreground: #fdba74;
+  --destructive: #ef4444;
+  --border: rgb(63 63 70 / 0.5);
+  --input: #3f3f46;
+  --ring: #f97316;
+  --brand-ink: #fb923c;
+  --verified: #38a9f5;
+  --chart-1: #f97316;
+  --chart-2: #fb923c;
+  --chart-3: #fdba74;
+  --chart-4: #a1a1aa;
+  --chart-5: #f4f4f5;
+  --radius: 0.75rem;
+  --sidebar: #27272a;
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-primary: #f97316;
+  --sidebar-primary-foreground: #1c0a02;
+  --sidebar-accent: #303034;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: rgb(63 63 70 / 0.5);
+  --sidebar-ring: #f97316;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  @media (max-width: 767px) {
+    input:not([type='checkbox']):not([type='radio']):not([type='file']),
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+}
+
+@keyframes perk-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes perk-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  42% {
+    opacity: 0.55;
+  }
+  46% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.7;
+  }
+  74% {
+    opacity: 1;
+  }
+}
+
+@keyframes perk-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 8px 0 var(--perk-glow);
+  }
+  50% {
+    box-shadow: 0 0 20px 3px var(--perk-glow);
+  }
+}
+
+@keyframes perk-shimmer {
+  0% {
+    background-position: -120% 0;
+  }
+  100% {
+    background-position: 220% 0;
+  }
+}
+
+.perk-glow {
+  animation: perk-glow var(--perk-glow-dur, 2.6s) ease-in-out infinite;
+}
+
+.perk-anim-slow {
+  animation: perk-spin 6s linear infinite;
+}
+
+.perk-anim-mid {
+  animation: perk-spin 3.5s linear infinite;
+}
+
+.perk-anim-neon {
+  animation:
+    perk-spin 2s linear infinite,
+    perk-flicker 1.6s steps(1) infinite;
+}
+
+.perk-anim-flame {
+  animation:
+    perk-spin 2.4s linear infinite,
+    perk-flicker 0.9s steps(1) infinite;
+}
+
+.perk-shimmer {
+  background-image: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 0.55) 50%, transparent 65%);
+  background-size: 60% 100%;
+  background-repeat: no-repeat;
+  animation: perk-shimmer 2.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .perk-glow,
+  .perk-anim-slow,
+  .perk-anim-mid,
+  .perk-anim-neon,
+  .perk-anim-flame,
+  .perk-shimmer {
+    animation: none;
+  }
+}
