@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
 import { AdminAuthModal, AdminSecurityBanner, ADMIN_MAX_ATTEMPTS } from './admin-security'
 import { InstallAppButton } from './install-app-guide'
 import { MobileTabBar } from './mobile-tab-bar'
@@ -376,6 +377,109 @@ interface Product {
   comboStock?: Record<string, number>
   comboPrice?: Record<string, number>
   draft?: boolean
+}
+
+type ProductRow = Record<string, unknown>
+
+const firstValue = (row: ProductRow, keys: string[]) => {
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null && row[key] !== '') return row[key]
+  }
+  return undefined
+}
+
+const asNumber = (value: unknown, fallback = 0) => {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+const asString = (value: unknown, fallback = '') => (value == null ? fallback : String(value))
+
+const asBool = (value: unknown, fallback = false) => {
+  if (typeof value === 'boolean') return value
+  if (value === 'true' || value === 1 || value === '1') return true
+  if (value === 'false' || value === 0 || value === '0') return false
+  return fallback
+}
+
+const asJson = (value: unknown): unknown => {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value)
+    } catch {
+      return value
+    }
+  }
+  return value
+}
+
+const asRecordNumber = (value: unknown): Record<string, number> | undefined => {
+  const parsed = asJson(value)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+  return parsed as Record<string, number>
+}
+
+/** 把 public.products 列對齊現有 Product 介面；缺欄位時給 UI 安全預設值。SEED_PRODUCTS 仍作欄位參考。 */
+function mapProductRow(row: ProductRow): Product | null {
+  const id = asString(firstValue(row, ['id']))
+  if (!id) return null
+  const variants = asJson(firstValue(row, ['variants']))
+  const specs = asJson(firstValue(row, ['specs']))
+  const reviews = asJson(firstValue(row, ['reviews']))
+  return {
+    id,
+    sellerId: asString(firstValue(row, ['seller_id', 'sellerId'])),
+    name: asString(firstValue(row, ['name', 'title']), '未命名商品'),
+    category: asString(firstValue(row, ['category'])),
+    subCategory: asString(firstValue(row, ['sub_category', 'subCategory'])) || undefined,
+    price: asNumber(firstValue(row, ['price'])),
+    image: asString(firstValue(row, ['image', 'image_url', 'cover_url', 'cover'])),
+    variants: Array.isArray(variants) ? (variants as VariantGroup[]) : [],
+    stock: asNumber(firstValue(row, ['stock'])),
+    sold: asNumber(firstValue(row, ['sold'])),
+    specs: Array.isArray(specs) ? (specs as [string, string][]) : [],
+    desc: asString(firstValue(row, ['desc', 'description', 'body'])),
+    reviews: Array.isArray(reviews) ? (reviews as Review[]) : [],
+    active: asBool(firstValue(row, ['active', 'is_active', 'listed']), true),
+    flagged: asBool(firstValue(row, ['flagged']), false) || undefined,
+    flagReason: asString(firstValue(row, ['flag_reason', 'flagReason'])) || undefined,
+    reviewHold: asBool(firstValue(row, ['review_hold', 'reviewHold']), false) || undefined,
+    reviewApproved: asBool(firstValue(row, ['review_approved', 'reviewApproved']), false) || undefined,
+    optionStock: asRecordNumber(firstValue(row, ['option_stock', 'optionStock'])),
+    optionPrice: asRecordNumber(firstValue(row, ['option_price', 'optionPrice'])),
+    comboStock: asRecordNumber(firstValue(row, ['combo_stock', 'comboStock'])),
+    comboPrice: asRecordNumber(firstValue(row, ['combo_price', 'comboPrice'])),
+    draft: asBool(firstValue(row, ['draft', 'is_draft']), false) || undefined,
+  }
+}
+
+const FALLBACK_SELLER_PLAN: Plan = {
+  status: 'active',
+  periodStart: '',
+  nextDate: '',
+  method: 'card',
+  autoPay: false,
+}
+
+function catalogSeller(id: string, known?: Seller): Seller {
+  if (known) return known
+  return {
+    id: id || 'unknown',
+    name: '賣場',
+    owner: '',
+    idNo: '',
+    docName: '',
+    verify: 'approved',
+    appliedAt: '',
+    rating: 0,
+    followers: 0,
+    tagline: '',
+    city: '',
+    logoClass: 'bg-muted text-foreground',
+    bannerClass: 'from-muted to-muted',
+    gmvBase: 0,
+    plan: FALLBACK_SELLER_PLAN,
+  }
 }
 
 interface CartLine {
@@ -8550,7 +8654,7 @@ export default function OpenMarketplace() {
   const [page, setPage] = useState<'market' | 'rewards'>('market')
   const [account, setAccount] = useState<{ name: string } | null>(null)
   const [sellers, setSellers] = useState<Seller[]>(SEED_SELLERS)
-  const [products, setProducts] = useState<Product[]>(SEED_PRODUCTS)
+  const [products, setProducts] = useState<Product[]>([])
   const [orders, setOrders] = useState<Order[]>(SEED_ORDERS)
   const [payments, setPayments] = useState<Payment[]>(SEED_PAYMENTS)
   const [reports, setReports] = useState<Report[]>([])
@@ -8644,16 +8748,35 @@ export default function OpenMarketplace() {
   const [quick, setQuick] = useState<Exclude<QuickKey, 'trust' | 'checkin' | 'scratch'> | null>(null)
   const [trustOpen, setTrustOpen] = useState(false)
 
+  useEffect(() => {
+    let cancelled = false
+    const loadProducts = async () => {
+      try {
+        const { data, error } = await supabase.from('products').select('*')
+        if (cancelled) return
+        if (error || !Array.isArray(data)) {
+          setProducts([])
+          return
+        }
+        setProducts(data.map((row) => mapProductRow(row as ProductRow)).filter((p): p is Product => p != null))
+      } catch {
+        if (!cancelled) setProducts([])
+      }
+    }
+    void loadProducts()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const listedProducts = useMemo(
     () =>
-      products.filter(
-        (p) =>
-          p.active &&
-          !p.flagged &&
-          !p.reviewHold &&
-          sellerById.get(p.sellerId)?.verify === 'approved' &&
-          !isOffline(sellerById.get(p.sellerId) as Seller),
-      ),
+      products.filter((p) => {
+        if (!p.active || p.flagged || p.reviewHold) return false
+        const seller = sellerById.get(p.sellerId)
+        if (!seller) return true
+        return seller.verify === 'approved' && !isOffline(seller)
+      }),
     [products, sellerById],
   )
 
@@ -9925,7 +10048,7 @@ export default function OpenMarketplace() {
   )
 
   const openProduct = products.find((p) => p.id === productId) ?? null
-  const openProductSeller = openProduct ? sellerById.get(openProduct.sellerId) : undefined
+  const openProductSeller = openProduct ? catalogSeller(openProduct.sellerId, sellerById.get(openProduct.sellerId)) : undefined
   const storeSeller = storeId ? sellerById.get(storeId) : undefined
   const chatSeller = chatId ? sellerById.get(chatId) : undefined
 
