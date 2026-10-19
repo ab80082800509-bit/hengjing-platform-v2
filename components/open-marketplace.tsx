@@ -10261,7 +10261,8 @@ export default function OpenMarketplace() {
               ) : (
                 <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                   {visibleProducts.map((p) => {
-                    const s = catalogSeller(p.sellerId, sellerById.get(p.sellerId))
+                    const s = sellerById.get(p.sellerId)
+                    if (!s) return null
                     return <ProductCard key={p.id} product={p} seller={s} checkin={checkinSellerIds.has(s.id)} faved={favorites.includes(p.id)} onFav={() => toggleFav(p.id)} onOpen={() => setProductId(p.id)} onOpenStore={() => setStoreId(s.id)} />
                   })}
                 </div>
