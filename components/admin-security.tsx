@@ -1,5 +1,5 @@
 'use client'
-
+import { supabase } from '@/lib/supabase'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   Fingerprint,
@@ -18,7 +18,7 @@ import {
 export const ADMIN_MAX_ATTEMPTS = 3
 const SESSION_SECONDS = 14 * 60 + 59
 
-const DEMO = { account: 'admin', password: 'Admin#2026', code: '123456' }
+// const DEMO = { account: 'admin', password: 'Admin#2026', code: '123456' }
 
 const inputCls =
   'w-full rounded-xl border border-input bg-card px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground/70 focus:border-primary focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50'
@@ -57,10 +57,6 @@ export function AdminAuthModal({
   const locked = failed >= ADMIN_MAX_ATTEMPTS
   const [account, setAccount] = useState('')
   const [password, setPassword] = useState('')
-  const [method, setMethod] = useState<'totp' | 'passkey'>('totp')
-  const [code, setCode] = useState('')
-  const [scanning, setScanning] = useState(false)
-  const [passkeyOk, setPasskeyOk] = useState(false)
   const [hint, setHint] = useState('')
   const firstRef = useRef<HTMLInputElement>(null)
   const onCloseRef = useRef(onClose)
@@ -80,40 +76,44 @@ export function AdminAuthModal({
     }
   }, [])
 
-  const startPasskey = () => {
-    if (locked || scanning) return
-    setScanning(true)
-    setHint('')
-    window.setTimeout(() => {
-      setScanning(false)
-      setPasskeyOk(true)
-    }, 1000)
-  }
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    if (locked) return
-    const credentialsOk = account.trim() === DEMO.account && password === DEMO.password
-    const secondFactorOk = method === 'totp' ? code === DEMO.code : passkeyOk
-    if (credentialsOk && secondFactorOk) {
-      onSuccess()
-      return
-    }
-    const next = failed + 1
-    onFail()
-    setPassword('')
-    setCode('')
-    setPasskeyOk(false)
-    setHint(
-      next >= ADMIN_MAX_ATTEMPTS
-        ? ''
-        : `驗證失敗：帳號、密碼或驗證資訊不正確，還可再嘗試 ${ADMIN_MAX_ATTEMPTS - next} 次`,
-    )
-  }
+    const submit = async (e: FormEvent) => {
+      e.preventDefault()
+      if (locked) return
+    
+      setHint('')
+    
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: account.trim(),
+        password,
+      })
+    
+      if (!error && data.user) {
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', data.user.id)
+          .single()
+    
+        if (!profileError && profile?.role === 'admin') {
+          onSuccess()
+          return
+        }
+      }
+    
+      await supabase.auth.signOut()
+    
+      const next = failed + 1
+      onFail()
+      setPassword('')
+      setHint(
+        next >= ADMIN_MAX_ATTEMPTS
+          ? '登入失敗次數已達上限'
+          : `管理員驗證失敗，剩餘 ${ADMIN_MAX_ATTEMPTS - next} 次`,
+      )
+    }    
 
   const canSubmit =
-    !locked && account.trim() !== '' && password !== '' && (method === 'totp' ? /^\d{6}$/.test(code) : passkeyOk)
-
+  !locked && account.trim() !== '' && password !== ''
   return (
     <div className="fixed inset-0 z-[80] flex items-end justify-center bg-foreground/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
       <div
@@ -143,7 +143,9 @@ export function AdminAuthModal({
           {locked && (
             <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-destructive bg-destructive/10 p-3.5 text-sm font-bold text-destructive">
               <ShieldAlert className="mt-0.5 size-5 shrink-0" />
-              <p className="leading-relaxed">登入失敗已達上限！該 IP 已被暫時封鎖，並已發送安全警報至管理員手機。</p>
+              <p className="leading-relaxed">
+  登入失敗次數已達上限，請關閉視窗後稍後再試。
+</p>
             </div>
           )}
           {!locked && hint && (
@@ -176,78 +178,12 @@ export function AdminAuthModal({
               className={inputCls}
               placeholder="請輸入密碼"
             />
+ 
           </Field>
-
-          <div className="space-y-2">
-            <p className="text-xs font-bold text-muted-foreground">第二道驗證</p>
-            <div className="grid grid-cols-2 gap-1 rounded-full border border-border/70 bg-muted/60 p-1" role="group" aria-label="選擇第二道驗證方式">
-              {(
-                [
-                  ['totp', 'Google Authenticator', <Smartphone key="t" className="size-3.5" />],
-                  ['passkey', 'Passkey 生物辨識', <Fingerprint key="p" className="size-3.5" />],
-                ] as const
-              ).map(([id, label, icon]) => (
-                <button
-                  key={id}
-                  type="button"
-                  disabled={locked}
-                  aria-pressed={method === id}
-                  onClick={() => setMethod(id)}
-                  className={`flex items-center justify-center gap-1.5 rounded-full px-2 py-1.5 text-xs font-bold transition disabled:opacity-50 ${method === id ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-                >
-                  {icon}
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            {method === 'totp' ? (
-              <Field label="2FA 動態 6 位數驗證碼" htmlFor="admin-code">
-                <input
-                  id="admin-code"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  disabled={locked}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6}
-                  className={`${inputCls} text-center font-mono text-lg tracking-[0.5em]`}
-                  placeholder="000000"
-                />
-              </Field>
-            ) : (
-              <button
-                type="button"
-                onClick={startPasskey}
-                disabled={locked || scanning}
-                className={`${btnGhost} w-full py-3 ${passkeyOk ? 'border-emerald-600 text-emerald-400' : ''}`}
-              >
-                {scanning ? (
-                  <><Loader2 className="size-4 animate-spin" />生物辨識中...</>
-                ) : passkeyOk ? (
-                  <><ShieldCheck className="size-4" />Passkey 驗證已通過</>
-                ) : (
-                  <><Fingerprint className="size-4" />使用 Passkey 進行生物辨識</>
-                )}
-              </button>
-            )}
-          </div>
-
           <button type="submit" disabled={!canSubmit} className={btnPrimary}>
             <Lock className="size-4" />驗證並登入
+ 
           </button>
-
-          {locked && (
-            <button type="button" onClick={onResetLock} className={`${btnGhost} w-full`}>
-              <KeyRound className="size-4" />解除 IP 封鎖（測試用）
-            </button>
-          )}
-
-          <p className="rounded-xl bg-muted/60 p-3 text-xs leading-relaxed text-muted-foreground">
-            測試用：帳號 <code className="font-mono font-bold text-foreground">{DEMO.account}</code>、密碼{' '}
-            <code className="font-mono font-bold text-foreground">{DEMO.password}</code>、驗證碼{' '}
-            <code className="font-mono font-bold text-foreground">{DEMO.code}</code>（或 Passkey 模擬）。連續錯誤 {ADMIN_MAX_ATTEMPTS} 次會封鎖此 IP。
-          </p>
         </form>
       </div>
     </div>

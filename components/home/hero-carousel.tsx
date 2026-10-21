@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import Image from 'next/image'
 import { ChevronLeft, ChevronRight, Crown, Gift, Pause, Play, ShieldCheck, Store } from 'lucide-react'
 import type { QuickKey } from './quick-grid'
@@ -12,6 +12,7 @@ interface HeroCarouselProps {
   planPriceText: string
   onStartSelling: () => void
   onQuick: (key: QuickKey) => void
+  photos?: string[]
 }
 
 const INTERVAL_MS = 5500
@@ -25,20 +26,51 @@ const ctaPrimary =
 const ctaGhost =
   'inline-flex items-center justify-center gap-1.5 rounded-full border border-zinc-600/70 bg-zinc-900/50 px-4 py-2.5 text-sm font-bold text-foreground backdrop-blur transition hover:bg-zinc-900/80 active:scale-[0.98]'
 
-function Collage({ images }: { images: [string, string, string] }) {
+const FALLBACK_SRC = '/placeholder.svg'
+
+class ImageGuard extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+function CollagePhoto({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [src])
+  return (
+    <Image
+      src={!failed && src ? src : FALLBACK_SRC}
+      alt=""
+      width={288}
+      height={288}
+      sizes="144px"
+      className="aspect-square w-full object-cover"
+      onError={() => setFailed(true)}
+    />
+  )
+}
+
+function Collage({ images }: { images: string[] }) {
+  if (!images.length) return null
   const pos = ['left-0 top-8 -rotate-6', 'left-1/3 top-0 rotate-3', 'right-0 top-12 rotate-6']
   return (
     <div className="relative mx-auto hidden h-60 w-full max-w-sm md:block" aria-hidden>
-      {images.map((src, i) => (
-        <div key={src} className={`absolute w-36 overflow-hidden rounded-2xl border border-zinc-600/60 bg-zinc-800 shadow-2xl shadow-black/50 ${pos[i]}`}>
-          <Image src={src || '/placeholder.svg'} alt="" width={288} height={288} sizes="144px" className="aspect-square w-full object-cover" />
+      {images.slice(0, 3).map((src, i) => (
+        <div key={`${src}-${i}`} className={`absolute w-36 overflow-hidden rounded-2xl border border-zinc-600/60 bg-zinc-800 shadow-2xl shadow-black/50 ${pos[i]}`}>
+          <ImageGuard key={src} fallback={<img src={FALLBACK_SRC} alt="" className="aspect-square w-full object-cover" />}>
+            <CollagePhoto src={src} />
+          </ImageGuard>
         </div>
       ))}
     </div>
   )
 }
 
-export function HeroCarousel({ approvedCount, productCount, freeShipText, planPriceText, onStartSelling, onQuick }: HeroCarouselProps) {
+export function HeroCarousel({ approvedCount, productCount, freeShipText, planPriceText, onStartSelling, onQuick, photos = [] }: HeroCarouselProps) {
   const [index, setIndex] = useState(0)
   const [hover, setHover] = useState(false)
   const [focusIn, setFocusIn] = useState(false)
@@ -51,7 +83,6 @@ export function HeroCarousel({ approvedCount, productCount, freeShipText, planPr
     {
       key: 'market',
       glow: 'rgba(249,115,22,0.22)',
-      images: ['/products/mug.png', '/products/backpack.png', '/products/earbuds.png'] as [string, string, string],
       body: (
         <>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-orange-500/40 bg-orange-500/10 px-3 py-1 text-xs font-bold text-orange-300">
@@ -61,15 +92,15 @@ export function HeroCarousel({ approvedCount, productCount, freeShipText, planPr
             每位賣家，<br />都是一間小市集
           </h1>
           <p className="mt-3 max-w-lg text-pretty text-sm leading-relaxed text-muted-foreground md:text-base">
-            在買個 Pay 服逛手作、3C、露營與茶飲。多賣家一起結帳也不怕，系統自動拆單，7-11、全家、宅配任你選。
+            這裡只展示已通過審核並公開上架的商品。金流與物流尚未開放，結帳不會成立訂單。
           </p>
             <div className="mt-4 hidden flex-wrap gap-2 text-sm md:flex">
-            <span className="rounded-full border border-zinc-700/50 bg-zinc-900/60 px-3.5 py-1.5 font-bold"><span className="text-primary">{approvedCount}</span> 間認證賣家</span>
+            <span className="rounded-full border border-zinc-700/50 bg-zinc-900/60 px-3.5 py-1.5 font-bold"><span className="text-primary">{approvedCount}</span> 間有商品的賣場</span>
             <span className="rounded-full border border-zinc-700/50 bg-zinc-900/60 px-3.5 py-1.5 font-bold"><span className="text-primary">{productCount}</span> 件在架商品</span>
-            <span className="rounded-full border border-zinc-700/50 bg-zinc-900/60 px-3.5 py-1.5 font-bold">滿 {freeShipText} 免運</span>
+            <span className="rounded-full border border-zinc-700/50 bg-zinc-900/60 px-3.5 py-1.5 font-bold">參考門檻 {freeShipText}</span>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <button type="button" onClick={() => onQuick('hot')} className={ctaPrimary}>逛熱銷發燒榜</button>
+            <button type="button" onClick={() => onQuick('new')} className={ctaPrimary}>看最新上架</button>
             <button type="button" onClick={onStartSelling} className={ctaGhost}>
               <Store className="size-4 text-primary" aria-hidden />我要開店
               <span className="text-xs font-medium text-muted-foreground">月費 {planPriceText}</span>
@@ -81,7 +112,6 @@ export function HeroCarousel({ approvedCount, productCount, freeShipText, planPr
     {
       key: 'checkin',
       glow: 'rgba(245,158,11,0.2)',
-      images: ['/products/lantern.png', '/products/tea.png', '/products/vase.png'] as [string, string, string],
       body: (
         <>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-300">
@@ -102,20 +132,19 @@ export function HeroCarousel({ approvedCount, productCount, freeShipText, planPr
     {
       key: 'trust',
       glow: 'rgba(56,169,245,0.2)',
-      images: ['/products/camera.png', '/products/speaker.png', '/products/keyboard.png'] as [string, string, string],
       body: (
         <>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-xs font-bold text-sky-300">
-            <ShieldCheck className="size-3.5" aria-hidden />綠界履約保障
+            <ShieldCheck className="size-3.5" aria-hidden />交易說明
           </span>
           <h2 className="mt-3 text-balance text-[28px] font-black leading-tight text-foreground md:text-5xl">
-            確認收貨之後，<br />賣家才領得到款
+            先看得到商品，<br />付款尚未開放
           </h2>
           <p className="mt-3 max-w-lg text-pretty text-sm leading-relaxed text-muted-foreground md:text-base">
-            付款由綠界科技信託代收，買家確認收貨後才撥款給賣家，沒收到貨不用擔心。
+            平台目前不代收商品貨款。賣家申請、證件上傳與管理員審核仍照常運作。
           </p>
           <div className="mt-5 flex flex-wrap gap-2">
-            <button type="button" onClick={() => onQuick('trust')} className={ctaPrimary}>了解履約保障</button>
+            <button type="button" onClick={() => onQuick('trust')} className={ctaPrimary}>查看交易說明</button>
           </div>
         </>
       ),
@@ -123,7 +152,6 @@ export function HeroCarousel({ approvedCount, productCount, freeShipText, planPr
     {
       key: 'founder',
       glow: 'rgba(234,179,8,0.2)',
-      images: ['/products/bowl.png', '/products/toolset.png', '/products/vase.png'] as [string, string, string],
       body: (
         <>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-yellow-500/40 bg-yellow-500/10 px-3 py-1 text-xs font-bold text-yellow-300">
@@ -208,9 +236,9 @@ export function HeroCarousel({ approvedCount, productCount, freeShipText, planPr
               className="pointer-events-none absolute inset-0"
               style={{ backgroundImage: `radial-gradient(ellipse 60% 90% at 100% 0%, ${slide.glow}, transparent 70%)` }}
             />
-            <div className="relative grid items-center gap-5 px-5 pb-12 pt-5 md:grid-cols-[1.2fr_1fr] md:gap-6 md:px-12 md:pb-14 md:pt-10">
+            <div className={`relative grid items-center gap-5 px-5 pb-12 pt-5 md:gap-6 md:px-12 md:pb-14 md:pt-10 ${photos.length ? 'md:grid-cols-[1.2fr_1fr]' : ''}`}>
               <div>{slide.body}</div>
-              <Collage images={slide.images} />
+              <Collage images={photos} />
             </div>
           </div>
         ))}

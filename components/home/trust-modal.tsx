@@ -4,17 +4,17 @@ import { BadgeCheck, Banknote, PackageCheck, ShieldCheck, Truck, Wallet } from '
 import { SheetModal } from '@/components/sheet-modal'
 
 const STEPS = [
-  { icon: Wallet, title: '買家付款', body: '透過綠界金流付款，款項不會直接進入賣家帳戶，也不經過本平台。' },
-  { icon: ShieldCheck, title: '綠界信託代收', body: '款項暫留於綠界科技安全信託專戶，由綠界代為保管。' },
-  { icon: Truck, title: '賣家出貨', body: '賣家收到訂單通知後出貨，買家可在買家中心追蹤物流。' },
-  { icon: PackageCheck, title: '買家確認收貨', body: '商品確認無誤後，買家在買家中心按下確認收貨。' },
-  { icon: Banknote, title: '綠界撥款給賣家', body: '收到確認後，綠界才把款項撥付給賣家，完成代收代付。' },
+  { icon: Wallet, title: '金流尚未串接', body: '目前不能用信用卡或 ATM 完成真實付款，頁面也不會把訂單標成已付款。' },
+  { icon: ShieldCheck, title: '不會代收貨款', body: '買個 Pay 服現在不經手商品貨款，也沒有綠界信託帳戶。' },
+  { icon: Truck, title: '物流尚未開放', body: '7-11、全家與宅配都還沒有串接，不能模擬物流前進。' },
+  { icon: PackageCheck, title: '賣家審核是真的', body: '賣家仍須上傳證件，由平台管理員審核後才能上架。' },
+  { icon: Banknote, title: '成交數字來自真實資料', body: '銷量、評價與追蹤數只顯示已寫入的資料，沒有資料就保持空白。' },
 ]
 
 export function TrustModal({ onClose }: { onClose: () => void }) {
   return (
     <SheetModal
-      title="綠界履約保障"
+      title="交易說明"
       onClose={onClose}
       size="md"
       z={95}
@@ -34,9 +34,9 @@ export function TrustModal({ onClose }: { onClose: () => void }) {
             <ShieldCheck className="size-5" aria-hidden />
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-black text-blue-300">綠界科技 7 天信託代收代付</p>
+            <p className="text-sm font-black text-blue-300">金流與物流尚未開放</p>
             <p className="mt-0.5 text-pretty text-sm leading-relaxed text-muted-foreground">
-              買家確認收貨後，款項才會撥給賣家。商品沒收到或與描述不符，錢還在信託專戶裡。
+              可以瀏覽已上架商品、加入購物車，以及聯繫已審核的賣家。結帳不會成立訂單。
             </p>
           </div>
         </div>

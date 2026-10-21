@@ -56,7 +56,7 @@ export function MobileTabBar({ active, points, cartCount, centerBadge, onMarket,
       icon: ClipboardList,
       onClick: onCenter,
       badge: centerBadge > 0 ? { value: centerBadge, tone: 'alert' } : undefined,
-      ariaLabel: `買家中心，${centerBadge} 筆待處理訂單`,
+      ariaLabel: `買家中心，${centerBadge} 則未讀訂單通知`,
     },
   ]
 

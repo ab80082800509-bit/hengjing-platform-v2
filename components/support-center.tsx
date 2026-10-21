@@ -3,15 +3,18 @@
 import { useState, type FormEvent } from 'react'
 import { BellRing, CircleAlert, Headset, Inbox, Send } from 'lucide-react'
 
+export type SupportStatus = 'pending' | 'processing' | 'replied' | 'closed'
+
 export interface SupportTicket {
   id: string
+  userId?: string
   role: 'buyer' | 'seller'
   author: string
   category: string
   subject: string
   body: string
   at: string
-  status: 'open' | 'replied'
+  status: SupportStatus
   reply?: string
   repliedAt?: string
   unread?: boolean
@@ -24,23 +27,29 @@ const inputCls =
 const btnPrimary =
   'inline-flex items-center justify-center gap-1.5 rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition hover:brightness-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50'
 
+const STATUS_LABEL: Record<SupportStatus, string> = {
+  pending: '待處理',
+  processing: '處理中',
+  replied: '已回覆',
+  closed: '已結案',
+}
+
 function StatusPill({ t }: { t: SupportTicket }) {
-  return t.status === 'replied' ? (
-    <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-bold text-emerald-300">客服已回覆</span>
-  ) : (
-    <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-bold text-amber-300">處理中</span>
-  )
+  const tone = t.status === 'replied' || t.status === 'closed' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'
+  return <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${tone}`}>{STATUS_LABEL[t.status]}</span>
 }
 
 export function SupportCenter({
   role,
   author,
+  userId,
   tickets,
   onSubmit,
   onRead,
 }: {
   role: 'buyer' | 'seller'
   author: string
+  userId?: string
   tickets: SupportTicket[]
   onSubmit: (t: { category: string; subject: string; body: string }) => void
   onRead: (id: string) => void
@@ -51,7 +60,7 @@ export function SupportCenter({
   const [error, setError] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
 
-  const mine = tickets.filter((t) => t.role === role && t.author === author)
+  const mine = tickets.filter((t) => t.role === role && (userId ? t.userId === userId : t.author === author))
   const unread = mine.filter((t) => t.unread).length
 
   const submit = (e: FormEvent) => {
@@ -148,7 +157,7 @@ export function SupportCenter({
                           <p className="mt-0.5 whitespace-pre-wrap text-pretty leading-relaxed">{t.reply}</p>
                         </div>
                       ) : (
-                        <p className="text-xs text-muted-foreground">客服將於 1 個工作天內回覆，回覆時會主動通知您。</p>
+                        <p className="text-xs text-muted-foreground">尚無客服回覆。狀態為「{STATUS_LABEL[t.status]}」，不會顯示假的處理訊息。</p>
                       )}
                     </div>
                   )}
@@ -162,10 +171,11 @@ export function SupportCenter({
   )
 }
 
-export function AdminTicketsPanel({ tickets, onReply }: { tickets: SupportTicket[]; onReply: (id: string, text: string) => void }) {
+export function AdminTicketsPanel({ tickets, onReply }: { tickets: SupportTicket[]; onReply: (id: string, text: string, status: SupportStatus) => void }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const open = tickets.filter((t) => t.status === 'open')
-  const sorted = [...tickets].sort((a, b) => Number(b.status === 'open') - Number(a.status === 'open'))
+  const [statuses, setStatuses] = useState<Record<string, SupportStatus>>({})
+  const open = tickets.filter((t) => t.status === 'pending' || t.status === 'processing')
+  const sorted = [...tickets].sort((a, b) => Number(b.status === 'pending') - Number(a.status === 'pending'))
 
   return (
     <section aria-label="客服工單" className="space-y-3">
@@ -186,7 +196,8 @@ export function AdminTicketsPanel({ tickets, onReply }: { tickets: SupportTicket
               <p className="whitespace-pre-wrap text-pretty text-sm leading-relaxed text-muted-foreground">{t.body}</p>
               {t.reply ? (
                 <p className="rounded-xl bg-muted px-3 py-2 text-sm">已回覆：{t.reply}</p>
-              ) : (
+              ) : null}
+              {t.status !== 'closed' && (
                 <div className="space-y-2">
                   <label htmlFor={`reply-${t.id}`} className="sr-only">回覆 {t.subject}</label>
                   <textarea
@@ -195,18 +206,30 @@ export function AdminTicketsPanel({ tickets, onReply }: { tickets: SupportTicket
                     value={drafts[t.id] ?? ''}
                     onChange={(e) => setDrafts((d) => ({ ...d, [t.id]: e.target.value }))}
                     className={inputCls}
-                    placeholder="輸入回覆內容，送出後會自動通知對方"
+                    placeholder="留下真實回覆。沒有內容時不能標記成已回覆。"
                   />
+                  <label htmlFor={`status-${t.id}`} className="text-xs font-bold text-muted-foreground">處理狀態</label>
+                  <select
+                    id={`status-${t.id}`}
+                    value={statuses[t.id] ?? (t.status === 'pending' ? 'processing' : t.status)}
+                    onChange={(e) => setStatuses((current) => ({ ...current, [t.id]: e.target.value as SupportStatus }))}
+                    className={inputCls}
+                  >
+                    <option value="pending">待處理</option>
+                    <option value="processing">處理中</option>
+                    <option value="replied">已回覆</option>
+                    <option value="closed">已結案</option>
+                  </select>
                   <button
                     type="button"
-                    disabled={!(drafts[t.id] ?? '').trim()}
                     onClick={() => {
-                      onReply(t.id, (drafts[t.id] ?? '').trim())
+                      const status = statuses[t.id] ?? (t.status === 'pending' ? 'processing' : t.status)
+                      onReply(t.id, (drafts[t.id] ?? '').trim(), status)
                       setDrafts((d) => ({ ...d, [t.id]: '' }))
                     }}
                     className={btnPrimary}
                   >
-                    <Send className="size-4" />回覆並通知
+                    <Send className="size-4" />儲存處理結果
                   </button>
                 </div>
               )}

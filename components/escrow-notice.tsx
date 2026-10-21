@@ -1,7 +1,8 @@
 import { BadgeCheck, Handshake, Landmark, ShieldAlert, ShieldCheck, Video } from 'lucide-react'
 
 export const HIGH_PRICE_LIMIT = 15000
-export const REVIEW_PRICE_LIMIT = 30000
+/** 最高售價大於此金額才進入高價審核；等於此金額不因價格送審。 */
+export const REVIEW_PRICE_LIMIT = 50000
 
 export function EcpayEscrowNotice({ compact = false }: { compact?: boolean }) {
   return (
@@ -13,14 +14,14 @@ export function EcpayEscrowNotice({ compact = false }: { compact?: boolean }) {
         <ShieldCheck className="size-5" />
       </span>
       <div className="min-w-0 text-sm leading-relaxed">
-        <p className="font-black">綠界科技履約保證</p>
+        <p className="font-black">金流尚未開放</p>
         <p className="text-pretty text-xs sm:text-sm">
-          款項將暫留於綠界安全信託專戶，確認收貨無誤後才會撥款給賣家，提供完整履約保證。
+          綠界代收與撥款尚未串接。現在送出結帳不會建立訂單，也不會把款項標成已付款。
         </p>
         {!compact && (
           <p className="mt-1.5 flex items-center gap-1.5 text-xs font-bold text-blue-300">
             <Landmark className="size-3.5" />
-            選擇 ATM 時，系統會透過綠界產生專屬虛擬帳號
+            目前沒有虛擬帳號，也不會產生真實扣款
           </p>
         )}
       </div>
@@ -31,7 +32,7 @@ export function EcpayEscrowNotice({ compact = false }: { compact?: boolean }) {
 export function HighPriceSafetyTags({ price }: { price: number }) {
   if (price <= HIGH_PRICE_LIMIT) return null
   const tags = [
-    { icon: ShieldCheck, text: '享有綠界履約保證專戶保障' },
+    { icon: ShieldCheck, text: '高價商品需通過平台審核才會公開' },
     { icon: Handshake, text: '建議實體面交看貨' },
     { icon: Video, text: '拆封請務必全程錄影' },
   ]
@@ -65,7 +66,7 @@ export function PayoutStatus({ released, paid }: { released: boolean; paid: bool
       <div role="status" className="flex items-start gap-2 rounded-xl border border-emerald-500/35 bg-emerald-500/10 p-3 text-xs leading-relaxed text-emerald-300">
         <BadgeCheck className="mt-0.5 size-4 shrink-0" />
         <p>
-          <b>已完成撥款</b>：您已確認收貨，綠界信託專戶已將款項撥付給賣家。
+          <b>訂單狀態</b>：金流尚未串接，這個畫面不會代表款項已經撥付。
         </p>
       </div>
     )
@@ -75,7 +76,7 @@ export function PayoutStatus({ released, paid }: { released: boolean; paid: bool
     <div role="status" className="flex items-start gap-2 rounded-xl border border-blue-500/35 bg-blue-500/10 p-3 text-xs leading-relaxed text-blue-300">
       <ShieldCheck className="mt-0.5 size-4 shrink-0 text-blue-400" />
       <p>
-        <b>款項保管中</b>：款項暫留於綠界安全信託專戶，確認收貨後才會撥款給賣家。
+        <b>金流尚未開放</b>：目前不會把訂單標成已付款，也不會進入代收或撥款。
       </p>
     </div>
   )

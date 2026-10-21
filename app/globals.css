@@ -177,13 +177,34 @@
   animation: perk-shimmer 2.6s ease-in-out infinite;
 }
 
+@keyframes announcement-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.announcement-track {
+  display: flex;
+  width: max-content;
+  animation: announcement-marquee 32s linear infinite;
+}
+
+.announcement-track:hover {
+  animation-play-state: paused;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .perk-glow,
   .perk-anim-slow,
   .perk-anim-mid,
   .perk-anim-neon,
   .perk-anim-flame,
-  .perk-shimmer {
+  .perk-shimmer,
+  .announcement-track {
     animation: none;
+  }
+
+  .announcement-track {
+    width: auto;
+    max-width: 100%;
   }
 }

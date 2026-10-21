@@ -13,10 +13,10 @@ interface QuickItem {
 }
 
 const ITEMS: QuickItem[] = [
-  { key: 'freeShip', label: '全站免運專區', hint: '單件即享免運', icon: Truck, chip: 'from-emerald-500 to-teal-600' },
-  { key: 'hot', label: '熱銷發燒榜', hint: '銷量與評價熱度', icon: Flame, chip: 'from-orange-500 to-red-500' },
-  { key: 'founder', label: '創始特約店', hint: '早期進駐優質賣家', icon: Crown, chip: 'from-amber-400 to-yellow-600' },
-  { key: 'trust', label: '綠界履約保障', hint: '收貨後才撥款', icon: ShieldCheck, chip: 'from-sky-500 to-blue-600' },
+  { key: 'freeShip', label: '較高單價', hint: '只依售價篩選', icon: Truck, chip: 'from-emerald-500 to-teal-600' },
+  { key: 'hot', label: '有成交紀錄', hint: '依已驗證成交排序', icon: Flame, chip: 'from-orange-500 to-red-500' },
+  { key: 'founder', label: '創始特約店', hint: '已審核的早期賣家', icon: Crown, chip: 'from-amber-400 to-yellow-600' },
+  { key: 'trust', label: '交易說明', hint: '金流尚未開放', icon: ShieldCheck, chip: 'from-sky-500 to-blue-600' },
   { key: 'new', label: '新上架商品', hint: '最新上架牆', icon: Zap, chip: 'from-yellow-400 to-orange-500' },
   { key: 'checkin', label: '簽到兌換專區', hint: '兌換賣家優惠券', icon: Gift, chip: 'from-pink-500 to-rose-600' },
   { key: 'scratch', label: '幸運刮刮卡', hint: '每日免費刮一次', icon: Ticket, chip: 'from-violet-500 to-fuchsia-600' },

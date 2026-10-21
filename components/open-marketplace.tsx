@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { AdminAuthModal, AdminSecurityBanner, ADMIN_MAX_ATTEMPTS } from './admin-security'
 import { InstallAppButton } from './install-app-guide'
@@ -12,7 +13,6 @@ import { TermsModal } from './terms-modal'
 import { EcpayEscrowNotice, HighPriceSafetyTags, PayoutStatus, HIGH_PRICE_LIMIT, REVIEW_PRICE_LIMIT } from './escrow-notice'
 import { HeroCarousel } from './home/hero-carousel'
 import { QuickGrid, type QuickKey } from './home/quick-grid'
-import { FlashSale } from './home/flash-sale'
 import { TrustModal } from './home/trust-modal'
 import { DailyRewards } from './home/daily-rewards'
 import { CheckinCard } from './home/checkin-card'
@@ -37,12 +37,54 @@ import {
   type ScratchCard,
   type ScratchOutcome,
 } from './home/scratch-config'
-import { SecurityPanel, ForgotPasswordModal } from './account-security'
+import { SecurityPanel, ForgotPasswordModal, SetNewPasswordModal } from './account-security'
+import { AdminAnnouncementsPanel, AnnouncementMarquee, type PublicAnnouncement } from './platform-announcements'
 import { SupportCenter, AdminTicketsPanel, type SupportTicket } from './support-center'
 import { OnboardingTour } from './onboarding-tour'
 import { BuyerProfileHeader, BuyerProfilePanel, FavoritesPanel, FollowingPanel, UserAvatar, type FollowPrefs } from './buyer-profile'
+import { SimilarProductsDialog } from './similar-products'
+import { StorefrontEditor } from './storefront-editor'
+import { SellerChatDialog, SellerChatPanel, type ChatProductPreview } from './seller-chat'
+import { BuyerOrdersPanel, OrderNotifications, SellerOrdersPanel, SellerReportPanel, SellerSnapshotCards, useOrderUnread } from './commerce-orders'
+import { listMyBuyerOrders, type BuyerOrderBucket } from '@/lib/commerce-orders'
+import {
+  addFavorite,
+  adminUpdateTicket,
+  createProductReview,
+  createSupportTicket,
+  dataUrlToBlob,
+  fetchAdminTickets,
+  fetchFollowCounts,
+  fetchMyProfile,
+  fetchMyReviews,
+  fetchMyTickets,
+  fetchPublicReviews,
+  fetchPublicStoreNames,
+  fetchPublicStorefront,
+  fetchSellerChats,
+  fetchVerifiedSales,
+  followSeller,
+  listFavoriteIds,
+  listFollowedSellerIds,
+  markTicketRead,
+  removeFavorite,
+  removeMemberAvatar,
+  replyToProductReview,
+  saveAvatarTone,
+  savePublicNickname,
+  unfollowSeller,
+  uploadMemberAvatar,
+  uploadReviewPhoto,
+  type PublicReview,
+  type StorefrontSettings,
+  type TicketRow,
+  storeReputation,
+  storeThemeStyle,
+} from '@/lib/marketplace-features'
+import { ACCEPT_ATTR, readFileAsDataUrl, validateImageFile } from '@/lib/image-utils'
+import { signupErrorZh } from '@/lib/auth-errors'
+import { marketplaceHref, readMarketplaceNav, sameNav, type MarketplaceNav, type SellerTab } from '@/lib/marketplace-url'
 import { EvidenceThumbs, EvidenceUploader } from './evidence-uploader'
-import { SubscriptionManager } from './subscription-cancel'
 import {
   Baby,
   BadgeCheck,
@@ -62,7 +104,6 @@ import {
   Timer,
   ChevronDown,
   ChevronRight,
-  FlaskConical,
   Footprints,
   House,
   Mail,
@@ -143,7 +184,7 @@ import { VariantEditor, parseOptions, isSizeName } from '@/components/variant-ed
 
 type Role = 'buyer' | 'seller' | 'admin'
 type VerifyStatus = 'approved' | 'pending' | 'rejected'
-type PlanStatus = 'active' | 'trial' | 'due' | 'verifying' | 'overdue' | 'grace' | 'suspended'
+type PlanStatus = 'active' | 'trial' | 'due' | 'verifying' | 'overdue' | 'grace' | 'suspended' | 'unbilled'
 type PayMethod = 'card' | 'atm'
 type ShipKey = 'home' | 'seven' | 'family'
 
@@ -158,6 +199,8 @@ interface Plan {
   graceElapsed?: number
   trialLeft?: number
   cancelAtPeriodEnd?: boolean
+  /** false：月費／綠界尚未串接，不可把試用或已繳費當成真實狀態。 */
+  billingLinked?: boolean
 }
 
 interface BusinessInfo {
@@ -308,6 +351,7 @@ interface Seller {
   idNo: string
   docName: string
   docUrl?: string
+  kycDocumentPath?: string
   verify: VerifyStatus
   rejectReason?: string
   appliedAt: string
@@ -320,6 +364,7 @@ interface Seller {
   bannerClass: string
   gmvBase: number
   plan: Plan
+  userId?: string
   suspended?: boolean
   suspendReason?: string
   business?: BusinessInfo
@@ -328,6 +373,7 @@ interface Seller {
   shipDays?: number
   banned?: boolean
   founderNo?: number
+  certifiedAt?: string | null
 }
 
 interface Viewer {
@@ -346,6 +392,7 @@ interface Review {
   rating: number
   text: string
   date: string
+  photos?: string[]
 }
 
 interface VariantGroup {
@@ -364,6 +411,7 @@ interface Product {
   variants: VariantGroup[]
   stock: number
   sold: number
+  verifiedSold?: number
   specs: [string, string][]
   desc: string
   reviews: Review[]
@@ -372,11 +420,13 @@ interface Product {
   flagReason?: string
   reviewHold?: boolean
   reviewApproved?: boolean
+  reviewedAt?: string
   optionStock?: Record<string, number>
   optionPrice?: Record<string, number>
   comboStock?: Record<string, number>
   comboPrice?: Record<string, number>
   draft?: boolean
+  listedAt?: string
 }
 
 type ProductRow = Record<string, unknown>
@@ -425,7 +475,6 @@ function mapProductRow(row: ProductRow): Product | null {
   if (!id) return null
   const variants = asJson(firstValue(row, ['variants']))
   const specs = asJson(firstValue(row, ['specs']))
-  const reviews = asJson(firstValue(row, ['reviews']))
   return {
     id,
     sellerId: asString(firstValue(row, ['seller_id', 'sellerId'])),
@@ -437,21 +486,64 @@ function mapProductRow(row: ProductRow): Product | null {
     variants: Array.isArray(variants) ? (variants as VariantGroup[]) : [],
     stock: asNumber(firstValue(row, ['stock'])),
     sold: asNumber(firstValue(row, ['sold'])),
+    verifiedSold: 0,
     specs: Array.isArray(specs) ? (specs as [string, string][]) : [],
-    desc: asString(firstValue(row, ['desc', 'description', 'body'])),
-    reviews: Array.isArray(reviews) ? (reviews as Review[]) : [],
+    desc: asString(firstValue(row, ['description'])),
+    reviews: [],
     active: asBool(firstValue(row, ['active', 'is_active', 'listed']), true),
     flagged: asBool(firstValue(row, ['flagged']), false) || undefined,
     flagReason: asString(firstValue(row, ['flag_reason', 'flagReason'])) || undefined,
     reviewHold: asBool(firstValue(row, ['review_hold', 'reviewHold']), false) || undefined,
     reviewApproved: asBool(firstValue(row, ['review_approved', 'reviewApproved']), false) || undefined,
+    reviewedAt: asString(firstValue(row, ['reviewed_at', 'reviewedAt'])) || undefined,
     optionStock: asRecordNumber(firstValue(row, ['option_stock', 'optionStock'])),
     optionPrice: asRecordNumber(firstValue(row, ['option_price', 'optionPrice'])),
     comboStock: asRecordNumber(firstValue(row, ['combo_stock', 'comboStock'])),
     comboPrice: asRecordNumber(firstValue(row, ['combo_price', 'comboPrice'])),
     draft: asBool(firstValue(row, ['draft', 'is_draft']), false) || undefined,
+    listedAt: asString(firstValue(row, ['created_at', 'createdAt', 'listed_at', 'listedAt'])) || undefined,
   }
 }
+
+const asPriceReviewResult = (value: unknown) => {
+  const parsed = typeof value === 'string' ? asJson(value) : value
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const row = parsed as Record<string, unknown>
+  const product = row.product
+  return {
+    ok: row.ok === true,
+    status: typeof row.status === 'string' ? row.status : '',
+    product: product && typeof product === 'object' && !Array.isArray(product) ? (product as ProductRow) : null,
+  }
+}
+
+const PRODUCT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const isProductUuid = (id: string) => PRODUCT_UUID.test(id)
+
+function toProductWrite(p: Product) {
+  return {
+    name: p.name,
+    category: p.category,
+    sub_category: p.subCategory ?? null,
+    price: p.price,
+    image: p.image,
+    variants: p.variants,
+    stock: p.stock,
+    specs: p.specs,
+    description: p.desc,
+    active: p.active,
+    draft: !!p.draft,
+    option_stock: p.optionStock ?? null,
+    option_price: p.optionPrice ?? null,
+    combo_stock: p.comboStock ?? null,
+    combo_price: p.comboPrice ?? null,
+  }
+}
+
+const replaceProduct = (list: Product[], previousId: string, saved: Product) => [
+  saved,
+  ...list.filter((item) => item.id !== previousId && item.id !== saved.id),
+]
 
 const FALLBACK_SELLER_PLAN: Plan = {
   status: 'active',
@@ -460,7 +552,46 @@ const FALLBACK_SELLER_PLAN: Plan = {
   method: 'card',
   autoPay: false,
 }
+type SellerApplicationRow = {
+  id: string
+  user_id?: string | null
+  store_name: string | null
+  legal_name: string | null
+  status: 'pending' | 'approved' | 'rejected'
+  created_at: string
+  review_note: string | null
+  kyc_document_path: string | null
+}
 
+function mapSellerApplication(row: SellerApplicationRow): Seller {
+  return {
+    id: row.id,
+    userId: row.user_id || undefined,
+    name: row.store_name ?? '未命名賣場',
+    owner: row.legal_name ?? '',
+    idNo: '',
+    docName: '',
+    kycDocumentPath: row.kyc_document_path ?? undefined,
+    verify: row.status,
+    rejectReason: row.review_note ?? undefined,
+    appliedAt: row.created_at.slice(0, 10),
+    rating: 0,
+    followers: 0,
+    tagline: '',
+    city: '台灣',
+    logoClass: 'bg-muted text-foreground',
+    bannerClass: 'from-muted to-muted',
+    gmvBase: 0,
+    plan: {
+      status: 'unbilled',
+      periodStart: '',
+      nextDate: '',
+      method: 'card',
+      autoPay: false,
+      billingLinked: false,
+    },
+  }
+}
 function catalogSeller(id: string, known?: Seller): Seller {
   if (known) return known
   return {
@@ -491,6 +622,7 @@ interface CartLine {
 
 interface OrderItem {
   productId?: string
+  orderItemId?: string
   name: string
   variant: string
   qty: number
@@ -535,6 +667,7 @@ interface Appeal {
 interface ReviewInput {
   rating: number
   text: string
+  photos: string[]
 }
 
 type ReportReason = 'prohibited' | 'fake' | 'price' | 'ip' | 'mismatch' | 'other'
@@ -785,6 +918,47 @@ const STORES: Record<'seven' | 'family', { id: string; name: string; addr: strin
     { id: 'f-4', name: '台南成大店', addr: '台南市東區大學路 1 號' },
     { id: 'f-5', name: '新竹竹北店', addr: '新竹縣竹北市光明六路 55 號' },
   ],
+}
+
+const PRODUCT_IMAGE_BUCKET = 'product-images'
+const PRODUCT_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+
+type ProductImageFile = { ext: 'jpg' | 'png' | 'webp'; type: 'image/jpeg' | 'image/png' | 'image/webp' }
+
+function classifyProductImage(file: File): ProductImageFile | string {
+  if (file.size <= 0) return '檔案是空的，請改選一張圖片'
+  if (file.size > PRODUCT_IMAGE_MAX_BYTES) return '單張不可超過 8 MB'
+  const raw = (file.type === 'image/jpg' ? 'image/jpeg' : file.type).toLowerCase()
+  const byType: Record<string, ProductImageFile> = {
+    'image/jpeg': { ext: 'jpg', type: 'image/jpeg' },
+    'image/png': { ext: 'png', type: 'image/png' },
+    'image/webp': { ext: 'webp', type: 'image/webp' },
+  }
+  if (byType[raw]) return byType[raw]
+  const generic = raw === '' || raw === 'application/octet-stream'
+  const name = file.name.toLowerCase()
+  if (generic && (name.endsWith('.jpg') || name.endsWith('.jpeg'))) return byType['image/jpeg']
+  if (generic && name.endsWith('.png')) return byType['image/png']
+  if (generic && name.endsWith('.webp')) return byType['image/webp']
+  return '只接受 JPG、PNG 或 WebP'
+}
+
+function productImageUploadFailure(status: number, body: string) {
+  let message = body.trim()
+  try {
+    const parsed = JSON.parse(body) as { message?: string; error?: string }
+    message = parsed.message || parsed.error || message
+  } catch {
+    /* 保留原始回應 */
+  }
+  const text = message.toLowerCase()
+  if (status === 401 || text.includes('jwt') || text.includes('not authenticated')) return '登入狀態已失效，請重新登入後再上傳。圖片沒有存進商品。'
+  if (status === 413 || text.includes('too large') || text.includes('payload')) return '單張不可超過 8 MB，圖片沒有上傳'
+  if (text.includes('mime') || text.includes('content type') || text.includes('invalid file')) return '只接受 JPG、PNG 或 WebP，圖片沒有上傳'
+  if (text.includes('bucket') || text.includes('nosuchbucket')) return '商品圖片空間尚未建立，請先審查並執行 Storage migration。圖片沒有上傳。'
+  if (status === 403 || text.includes('row-level security') || text.includes('policy') || text.includes('unauthorized')) return '沒有上傳權限。請用已認證賣家帳號，且只能上傳到自己的資料夾。圖片沒有存進商品。'
+  if (text.includes('duplicate') || status === 409) return '圖片檔名衝突，請再上傳一次。這次沒有存進商品。'
+  return message ? `圖片上傳失敗：${message}。商品沒有改用這張圖。` : `圖片上傳失敗（${status}）。商品沒有改用這張圖。`
 }
 
 const IMAGE_OPTIONS = [
@@ -1307,24 +1481,6 @@ const SEED_ORDERS: Order[] = [
     shipTo: '7-11 台北車站門市',
   },
   {
-    id: 'OD20261010110',
-    sellerId: 's3',
-    owner: DEMO_OWNER,
-    buyer: '測試買家',
-    items: [{ productId: 'p7', name: '30L 防潑水登山後背包', variant: '岩灰', qty: 1, price: 2380 }],
-    subtotal: 2380,
-    shipping: 0,
-    total: 2380,
-    pay: 'card',
-    payStatus: '已付款',
-    status: '已出貨',
-    date: '2026-10-10',
-    shipMethod: 'seven',
-    shipTo: '7-11 板橋文化門市',
-    tracking: 'TW4410305512',
-    stage: 2,
-  },
-  {
     id: 'OD20261005111',
     sellerId: 's2',
     owner: DEMO_OWNER,
@@ -1490,6 +1646,15 @@ const unitPrice = (p: Product, sel: Record<string, string>) => {
   return Object.entries(sel).reduce((pr, [g, o]) => p.optionPrice?.[optKey(g, o)] ?? pr, p.price)
 }
 const topPrice = (p: Product) => Math.max(p.price, ...Object.values(p.optionPrice ?? {}), ...Object.values(p.comboPrice ?? {}))
+const priceReviewPending = (p: Product) => p.reviewHold === true && !p.reviewedAt
+const priceReviewRejected = (p: Product) => p.reviewHold === true && !!p.reviewedAt && p.reviewApproved !== true
+const priceReviewApproved = (p: Product) => p.reviewHold !== true && p.reviewApproved === true && !!p.reviewedAt
+const priceReviewBlocksPublic = (p: Product) =>
+  !!p.reviewHold || (topPrice(p) > REVIEW_PRICE_LIMIT && !p.reviewApproved)
+const sellerByMemberId = (sellers: Seller[], memberId: string) => {
+  const same = sellers.filter((s) => !!s.userId && s.userId === memberId)
+  return same.find((s) => s.verify === 'approved') ?? same[0]
+}
 const priceSpan = (p: Product, sel: Record<string, string>): [number, number] => {
   if (!isCombo(p)) {
     const v = unitPrice(p, sel)
@@ -1516,10 +1681,6 @@ const readOptionMap = (p: Product | null, key: 'optionStock' | 'optionPrice'): R
   return out
 }
 
-type BuyerStage = 'unpaid' | 'toShip' | 'shipping' | 'done'
-const buyerStage = (o: Order): BuyerStage =>
-  o.payStatus === '待匯款' ? 'unpaid' : o.status === '待出貨' ? 'toShip' : o.status === '已出貨' ? 'shipping' : 'done'
-const LAST_STAGE = 3
 const BUYER_PHONE_MASKED = '0909-***-832'
 const OTP_CODE = '123456'
 const BANKS = ['國泰世華銀行', '中國信託銀行', '台新銀行', '玉山銀行', '富邦銀行']
@@ -1590,29 +1751,6 @@ function ReviewReplyBox({ review, perks, onSubmit }: { review?: Review; perks?: 
     </div>
   )
 }
-const shiftDate = (dateStr: string, days: number) => {
-  const d = new Date(`${dateStr}T00:00:00`)
-  d.setDate(d.getDate() + days)
-  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`
-}
-const atmAccount = (o: Order) => `玉山銀行(808) 0${o.id.slice(-6)}${o.sellerId.replace(/\D/g, '').padStart(2, '0')}`
-
-function trackSteps(o: Order, sellerName: string): { label: string; detail: string; time: string }[] {
-  const cvs = o.shipMethod !== 'home'
-  const base = [
-    { label: '賣家已出貨', detail: `${sellerName} 已將包裹交付物流業者` },
-    { label: '物流中心處理中', detail: '包裹已抵達物流轉運中心，分揀處理中' },
-    cvs
-      ? { label: `已到達 ${o.shipTo}`, detail: '包裹已送達取貨門市，等待店員上架' }
-      : { label: '配送員派送中', detail: '包裹已由配送員攜帶出發，今日預計送達' },
-    cvs
-      ? { label: '待取件', detail: '請於 7 日內攜帶證件前往門市取件' }
-      : { label: '已送達，待簽收', detail: `已送達 ${o.shipTo}` },
-  ]
-  const offsets = [1, 1, 2, 2]
-  const clocks = ['09:12', '18:40', '07:55', '10:30']
-  return base.map((s, i) => ({ ...s, time: `${shiftDate(o.date, offsets[i])} ${clocks[i]}` }))
-}
 const avg = (reviews: Review[]) =>
   reviews.length ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0
 
@@ -1652,7 +1790,7 @@ function Modal({
   title: string
   onClose: () => void
   children: ReactNode
-  size?: 'sm' | 'md' | 'lg' | 'xl' | 'store'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'store' | 'center'
   z?: number
 }) {
   const idRef = useRef(0)
@@ -1678,17 +1816,26 @@ function Modal({
   }, [])
 
   const isStore = size === 'store'
-  const width = { sm: 'max-w-md', md: 'max-w-xl', lg: 'max-w-3xl', xl: 'max-w-5xl', store: 'max-w-2xl' }[size]
+  const isCenter = size === 'center'
+  const width = { sm: 'max-w-md', md: 'max-w-xl', lg: 'max-w-3xl', xl: 'max-w-5xl', store: 'max-w-2xl', center: '' }[size]
   const header = (
     <div
-      className={`flex items-center justify-between gap-3 border-b border-border/70 bg-card px-5 py-3.5 ${isStore ? 'sticky top-0 z-20' : ''}`}
+      className={`flex items-center justify-between gap-3 border-b border-border/70 bg-card ${
+        isCenter
+          ? 'shrink-0 px-3 pb-2.5 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-6 sm:py-4'
+          : `px-5 py-3.5 ${isStore ? 'sticky top-0 z-20' : ''}`
+      }`}
     >
-      <h2 className="text-balance text-base font-black">{title}</h2>
+      <h2 className={isCenter ? 'min-w-0 flex-1 truncate text-base font-black' : 'text-balance text-base font-black'}>{title}</h2>
       <button
         type="button"
         onClick={onClose}
         aria-label="關閉視窗"
-        className="rounded-full p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        className={
+          isCenter
+            ? 'grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+            : 'rounded-full p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground'
+        }
       >
         <X className="size-5" />
       </button>
@@ -1697,7 +1844,11 @@ function Modal({
   return (
     <div
       className={`fixed inset-0 flex justify-center bg-foreground/40 backdrop-blur-sm ${
-        isStore ? 'items-center p-0 py-2 sm:p-4' : 'items-end p-0 sm:items-center sm:p-4'
+        isCenter
+          ? 'items-stretch p-0 sm:p-4 md:p-6 lg:p-8'
+          : isStore
+            ? 'items-center p-0 py-2 sm:p-4'
+            : 'items-end p-0 sm:items-center sm:p-4'
       }`}
       style={{ zIndex: z }}
       onMouseDown={(e) => {
@@ -1714,6 +1865,16 @@ function Modal({
           {header}
           {children}
         </div>
+      ) : isCenter ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+          className="absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden bg-card sm:static sm:h-full sm:max-h-full sm:w-full sm:max-w-[100rem] sm:rounded-3xl sm:border sm:border-border/70 sm:shadow-2xl"
+        >
+          {header}
+          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain">{children}</div>
+        </div>
       ) : (
         <div
           role="dialog"
@@ -1729,20 +1890,56 @@ function Modal({
   )
 }
 
-function Stars({ value, size = 'size-3.5', showValue = true }: { value: number; size?: string; showValue?: boolean }) {
+function Stars({ value, size = 'size-3.5', showValue = true, emptyLabel = '尚無評價' }: { value: number; size?: string; showValue?: boolean; emptyLabel?: string }) {
+  const known = value > 0
   return (
-    <span className="inline-flex items-center gap-1" aria-label={`評價 ${value.toFixed(1)} 顆星`}>
+    <span className="inline-flex items-center gap-1" aria-label={known ? `評價 ${value.toFixed(1)} 顆星` : emptyLabel}>
       <span className="inline-flex">
         {[1, 2, 3, 4, 5].map((i) => (
           <Star
             key={i}
-            className={`${size} ${i <= Math.round(value) ? 'fill-primary text-primary' : 'fill-muted text-border'}`}
+            className={`${size} ${known && i <= Math.round(value) ? 'fill-primary text-primary' : 'fill-muted text-border'}`}
           />
         ))}
       </span>
-      {showValue && <span className="text-xs font-bold text-foreground">{value ? value.toFixed(1) : '新店'}</span>}
+      {showValue && <span className="text-xs font-bold text-foreground">{known ? value.toFixed(1) : emptyLabel}</span>}
     </span>
   )
+}
+
+function StoreReputationView({ certifiedAt }: { certifiedAt?: string | null }) {
+  const rep = storeReputation(certifiedAt)
+  if (rep.count > 0 && rep.average > 0) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <Stars value={rep.average} />
+        <span className="text-xs font-bold text-foreground">{rep.count} 則評價</span>
+      </span>
+    )
+  }
+  return <Stars value={0} emptyLabel={rep.label} />
+}
+
+function soldLabel(product: Product) {
+  return `已售出 ${(product.verifiedSold ?? 0).toLocaleString('en-US')} 件`
+}
+
+function toSupportTicket(row: TicketRow): SupportTicket {
+  const stamp = (value?: string) => (value ? value.slice(0, 16).replace('T', ' ') : undefined)
+  return {
+    id: row.id,
+    userId: row.userId,
+    role: row.role,
+    author: row.author,
+    category: row.category,
+    subject: row.subject,
+    body: row.body,
+    at: stamp(row.at) ?? '',
+    status: row.status,
+    reply: row.reply,
+    repliedAt: stamp(row.repliedAt),
+    unread: row.unread,
+  }
 }
 
 function VerifiedBadge({ label = false }: { label?: boolean }) {
@@ -1790,13 +1987,23 @@ function Tabs<T extends string>({
   tabs,
   value,
   onChange,
+  variant = 'bar',
 }: {
   tabs: { id: T; label: string; icon?: ReactNode; badge?: number }[]
   value: T
   onChange: (v: T) => void
+  variant?: 'bar' | 'scroll'
 }) {
+  const scroll = variant === 'scroll'
   return (
-    <div role="tablist" className="flex gap-1 overflow-x-auto rounded-full border border-border/70 bg-card p-1 shadow-sm">
+    <div
+      role="tablist"
+      className={
+        scroll
+          ? 'flex w-full min-w-0 max-w-full gap-2 overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+          : 'flex gap-1 overflow-x-auto rounded-full border border-border/70 bg-card p-1 shadow-sm'
+      }
+    >
       {tabs.map((t) => (
         <button
           key={t.id}
@@ -1804,9 +2011,17 @@ function Tabs<T extends string>({
           aria-selected={value === t.id}
           type="button"
           onClick={() => onChange(t.id)}
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-bold transition ${
-            value === t.id ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
+          className={
+            scroll
+              ? `inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-bold transition sm:min-h-10 ${
+                  value === t.id
+                    ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`
+              : `inline-flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-bold transition ${
+                  value === t.id ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`
+          }
         >
           {t.icon}
           {t.label}
@@ -1931,6 +2146,7 @@ interface SellerRegisterData {
   idNo: string
   docName: string
   docUrl?: string
+  docFile?: File
 }
 
 function AuthModal({
@@ -1943,8 +2159,8 @@ function AuthModal({
 }: {
   onForgot: () => void
   onClose: () => void
-  onLogin: (name: string) => void
-  onBuyer: (name: string) => void
+  onLogin: (email: string, password: string) => Promise<void>
+  onBuyer: (name: string, email: string, password: string) => Promise<void>
   onSeller: (d: SellerRegisterData) => void
   initialTab?: 'buyer' | 'seller'
 }) {
@@ -1953,7 +2169,7 @@ function AuthModal({
   const [buyer, setBuyer] = useState({ name: '', email: '', password: '' })
   const [login, setLogin] = useState({ email: '', password: '' })
   const [seller, setSeller] = useState({ storeName: '', owner: '', idNo: '' })
-  const [doc, setDoc] = useState<{ name: string; url?: string } | null>(null)
+  const [doc, setDoc] = useState<{ name: string; url?: string; file: File } | null>(null)
   const [kycAgreed, setKycAgreed] = useState(false)
 
   const emailOk = (v: string) => /^\S+@\S+\.\S+$/.test(v)
@@ -1964,7 +2180,7 @@ function AuthModal({
     if (!emailOk(buyer.email)) e.email = '請輸入有效的 Email'
     if (buyer.password.length < 6) e.password = '密碼至少 6 碼'
     setErrors(e)
-    if (Object.keys(e).length === 0) onBuyer(buyer.name.trim())
+    if (Object.keys(e).length === 0) void onBuyer(buyer.name.trim(), buyer.email.trim(), buyer.password)
   }
 
   const submitLogin = () => {
@@ -1972,7 +2188,7 @@ function AuthModal({
     if (!emailOk(login.email)) e.email = '請輸入有效的 Email'
     if (login.password.length < 6) e.password = '密碼至少 6 碼'
     setErrors(e)
-    if (Object.keys(e).length === 0) onLogin(login.email.split('@')[0])
+    if (Object.keys(e).length === 0) void onLogin(login.email, login.password)
   }
 
   const submitSeller = () => {
@@ -1991,6 +2207,7 @@ function AuthModal({
         idNo: seller.idNo.trim().toUpperCase(),
         docName: doc.name,
         docUrl: doc.url,
+        docFile: doc.file,
       })
   }
 
@@ -2006,7 +2223,7 @@ function AuthModal({
           <div className="grid grid-cols-2 gap-1 rounded-full bg-muted p-1" role="tablist">
             {(
               [
-                ['buyer', '買家註冊', UserRound],
+                ['buyer', '一般註冊', UserRound],
                 ['seller', '賣家實名註冊', ShieldCheck],
               ] as const
             ).map(([id, label, Icon]) => (
@@ -2045,7 +2262,7 @@ function AuthModal({
               <input type="password" className={inputCls} value={buyer.password} onChange={(e) => setBuyer({ ...buyer, password: e.target.value })} placeholder="至少 6 碼" />
             </Field>
             <button type="submit" className={`${btnPrimary} w-full`}>
-              建立買家帳號
+              建立帳號
             </button>
           </form>
         )}
@@ -2094,7 +2311,13 @@ function AuthModal({
                   onChange={(e) => {
                     const f = e.target.files?.[0]
                     if (!f) return
-                    setDoc({ name: f.name, url: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined })
+                    setDoc({
+                      name: f.name,
+                      url: f.type.startsWith('image/')
+                        ? URL.createObjectURL(f)
+                        : undefined,
+                      file: f
+                    })
                   }}
                 />
               </span>
@@ -2167,6 +2390,10 @@ function AuthModal({
               已有帳號？
               <button type="button" onClick={() => switchTab('login')} className="font-bold text-brand-ink hover:underline">
                 登入
+              </button>
+              <span className="mx-1.5 text-border">·</span>
+              <button type="button" onClick={onForgot} className="font-bold text-brand-ink hover:underline">
+                忘記密碼
               </button>
             </>
           )}
@@ -2253,6 +2480,7 @@ function ProductCard({
   checkin = false,
   faved = false,
   onFav,
+  onSimilar,
 }: {
   product: Product
   seller: Seller
@@ -2261,6 +2489,7 @@ function ProductCard({
   checkin?: boolean
   faved?: boolean
   onFav?: () => void
+  onSimilar?: () => void
 }) {
   const rating = avg(product.reviews)
   return (
@@ -2294,24 +2523,31 @@ function ProductCard({
           <h3 className="line-clamp-2 min-h-9 text-[13px] font-medium leading-[18px]">{product.name}</h3>
           <div className="flex flex-wrap items-baseline justify-between gap-x-1">
             <p className="whitespace-nowrap text-[15px] font-black leading-5 text-brand-ink">{money(product.price)}</p>
-            <p className="text-[11px] leading-5 text-muted-foreground">已售出 {product.sold.toLocaleString('en-US')}</p>
+            <p className="text-[11px] leading-5 text-muted-foreground">{soldLabel(product)}</p>
           </div>
           <Stars value={rating} size="size-3" />
         </div>
       </button>
-      {onOpenStore && (
-        <div className="border-t border-border/60 px-2 py-1.5">
-          <button
-            type="button"
-            onClick={onOpenStore}
-            className="flex w-full items-center gap-1 text-[11px] font-medium text-muted-foreground transition hover:text-brand-ink"
-          >
-            <Store className="size-3 shrink-0" />
-            <span className="truncate">{seller.name}</span>
-            {seller.verify === 'approved' && <VerifiedBadge />}
-            <span className="hidden md:contents"><FounderBadge seller={seller} /></span>
-            <ChevronRight className="ml-auto size-3 shrink-0" />
-          </button>
+      {(onOpenStore || onSimilar) && (
+        <div className="flex items-center gap-1 border-t border-border/60 px-2 py-1.5">
+          {onOpenStore && (
+            <button
+              type="button"
+              onClick={onOpenStore}
+              className="flex min-w-0 flex-1 items-center gap-1 text-[11px] font-medium text-muted-foreground transition hover:text-brand-ink"
+            >
+              <Store className="size-3 shrink-0" />
+              <span className="truncate">{seller.name}</span>
+              {seller.verify === 'approved' && <VerifiedBadge />}
+              <span className="hidden md:contents"><FounderBadge seller={seller} /></span>
+              <ChevronRight className="ml-auto size-3 shrink-0" />
+            </button>
+          )}
+          {onSimilar && (
+            <button type="button" onClick={onSimilar} className="shrink-0 text-[11px] font-bold text-brand-ink">
+              找相似
+            </button>
+          )}
         </div>
       )}
     </article>
@@ -2341,6 +2577,7 @@ function ProductModal({
   onOpenSimilar,
   onNotify,
   preview,
+  followCount,
 }: {
   product: Product
   seller: Seller
@@ -2360,14 +2597,16 @@ function ProductModal({
   onOpenSimilar?: (id: string) => void
   onNotify?: (msg: string) => void
   preview?: { draft: boolean; onEdit: () => void; onPublish: () => void }
+  followCount?: number
 }) {
   const [reportOpen, setReportOpen] = useState(false)
-  const [showSimilar, setShowSimilar] = useState(false)
   const [view, setView] = useState(0)
+  const pickKey = `hj-pick:${product.id}`
   const [qty, setQty] = useState(1)
   const [sel, setSel] = useState<Record<string, string>>(() =>
     Object.fromEntries(product.variants.filter((v) => v.options.length === 1).map((v) => [v.name, v.options[0]])),
   )
+  const pickReady = useRef(false)
   const [needPick, setNeedPick] = useState(false)
   const variantsRef = useRef<HTMLDivElement>(null)
   const rating = avg(product.reviews)
@@ -2378,6 +2617,38 @@ function ProductModal({
   const [priceMin, priceMax] = priceSpan(product, sel)
   const shownPrice = priceMin
   const pickedLabel = product.variants.map((g) => sel[g.name]).filter(Boolean).map(fmtOpt).join(' / ')
+  useEffect(() => {
+    pickReady.current = false
+    try {
+      const parsed = JSON.parse(sessionStorage.getItem(pickKey) || 'null') as { sel?: Record<string, string>; qty?: number } | null
+      if (parsed?.sel) {
+        setSel((current) => {
+          const next = { ...current }
+          for (const group of product.variants) {
+            const picked = parsed.sel?.[group.name]
+            if (picked && group.options.includes(picked)) next[group.name] = picked
+          }
+          return next
+        })
+      }
+      const savedQty = Number(parsed?.qty)
+      if (Number.isInteger(savedQty) && savedQty > 0 && savedQty <= 99) setQty(savedQty)
+    } catch {
+      /* ignore broken selection cache */
+    }
+    pickReady.current = true
+  }, [pickKey, product.variants])
+  useEffect(() => {
+    if (!pickReady.current) return
+    const kept: Record<string, string> = {}
+    for (const group of product.variants) {
+      const picked = sel[group.name]
+      if (picked && group.options.includes(picked)) kept[group.name] = picked
+    }
+    const safeQty = limit > 0 ? Math.min(qty, limit) : qty
+    sessionStorage.setItem(pickKey, JSON.stringify({ sel: kept, qty: safeQty }))
+    if (limit > 0 && qty > limit) setQty(limit)
+  }, [limit, pickKey, product.variants, qty, sel])
   const tryBuy = (action: (variant: Record<string, string>, qty: number) => void) => {
     if (!complete) {
       setNeedPick(true)
@@ -2443,7 +2714,7 @@ function ProductModal({
             <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
               <Stars value={rating} />
               <span>{product.reviews.length} 則評價</span>
-              <span>已售出 {product.sold.toLocaleString('en-US')}</span>
+              <span>{soldLabel(product)}</span>
             </div>
           </div>
           <p className="rounded-2xl bg-secondary px-4 py-3 text-3xl font-black text-brand-ink">
@@ -2560,35 +2831,16 @@ function ProductModal({
 
           <div className="flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-bold text-accent-foreground">
             <Truck className="size-4 shrink-0" />
-            <span className="text-pretty">本賣場滿 {money(FREE_SHIP)} 免運，7-11 / 全家 / 宅配皆可</span>
+            <span className="text-pretty">運費與 7-11、全家、宅配尚未開放，加入購物車不會成立訂單。</span>
           </div>
           <EcpayEscrowNotice compact />
-          {similar && similar.length > 0 && (
-            <div className="space-y-2">
-              <button
-                type="button"
-                aria-expanded={showSimilar}
-                onClick={() => setShowSimilar((v) => !v)}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-bold transition hover:bg-muted"
-              >
-                <Search className="size-4" />找相似商品
-                <ChevronDown className={`size-4 transition ${showSimilar ? 'rotate-180' : ''}`} />
-              </button>
-              {showSimilar && (
-                <ul className="grid grid-cols-3 gap-2" aria-label="相似商品">
-                  {similar.map((sp) => (
-                    <li key={sp.id}>
-                      <button type="button" onClick={() => onOpenSimilar?.(sp.id)} className="block w-full overflow-hidden rounded-xl border border-border/70 text-left transition hover:border-primary">
-                        <ProductImage src={sp.image} alt={sp.name} />
-                        <span className="line-clamp-1 px-2 pt-1.5 text-xs font-bold">{sp.name}</span>
-                        <span className="block px-2 pb-1.5 text-xs font-black text-brand-ink">{money(sp.price)}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => onOpenSimilar?.(product.id)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-bold transition hover:bg-muted"
+          >
+            <Search className="size-4" />找相似商品
+          </button>
           {!preview && (
           <button
             type="button"
@@ -2614,8 +2866,8 @@ function ProductModal({
               {checkin && <CheckinBadge />}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-              <Stars value={seller.rating} />
-              <span>{seller.followers.toLocaleString('en-US')} 位粉絲</span>
+              <StoreReputationView certifiedAt={seller.certifiedAt} />
+              {typeof followCount === 'number' && <span>{followCount.toLocaleString('en-US')} 位粉絲</span>}
               <span>{seller.city}</span>
               {seller.business?.line && <span>LINE {seller.business.line}</span>}
             </div>
@@ -2664,7 +2916,7 @@ function ProductModal({
             買家評價 <span className="text-xs font-medium text-muted-foreground">（{product.reviews.length}）</span>
           </h4>
           {product.reviews.length === 0 ? (
-            <p className="rounded-2xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">尚無評價，成為第一位買家吧！</p>
+            <p className="rounded-2xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">尚無評價。只有真實完成的訂單可以評價。</p>
           ) : (
             <ul className="space-y-3">
               {product.reviews.map((r) => {
@@ -2688,6 +2940,14 @@ function ProductModal({
                   </div>
                   <div className="mt-2"><Stars value={r.rating} showValue={false} /></div>
                   <p className="mt-1.5 text-sm leading-relaxed">{r.text}</p>
+                  {!!r.photos?.length && (
+                    <div className="mt-2 flex gap-2">
+                      {r.photos.map((photo) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img key={photo} src={photo} alt="" className="size-16 rounded-lg object-cover" />
+                      ))}
+                    </div>
+                  )}
                   {r.reply && (
                     <div className="mt-3 rounded-xl border border-primary/30 bg-primary/10 p-3">
                       <p className="text-xs font-bold text-brand-ink">
@@ -2918,10 +3178,10 @@ function ReportModal({
 }
 
 /* ----------------------------------------------------------------------------
- * 賣家專屬賣場 Modal
+ * 賣家專屬賣場頁。草稿預覽與正式公開賣場共用這一版。
  * -------------------------------------------------------------------------- */
 
-function StoreModal({
+function StorePage({
   seller,
   closed = false,
   suspended = false,
@@ -2942,6 +3202,11 @@ function StoreModal({
   ownedCodes = [],
   onRedeem,
   onClaim,
+  storefront = null,
+  followCount = 0,
+  onSimilar,
+  bannerNote = null,
+  backLabel = '返回商城',
 }: {
   seller: Seller
   closed?: boolean
@@ -2963,36 +3228,76 @@ function StoreModal({
   ownedCodes?: string[]
   onRedeem?: (id: string) => void
   onClaim?: (id: string) => void
+  storefront?: StorefrontSettings | null
+  followCount?: number
+  onSimilar?: (id: string) => void
+  bannerNote?: { title: string; detail: string; action?: string; onAction?: () => void } | null
+  backLabel?: string
 }) {
   const [reportOpen, setReportOpen] = useState(false)
   const [redeemOpen, setRedeemOpen] = useState(false)
   const [sort, setSort] = useState<'new' | 'hot' | 'price'>('hot')
+  const [storeCategory, setStoreCategory] = useState('全部')
+  const [keyword, setKeyword] = useState('')
+  const theme = storeThemeStyle(storefront?.theme)
+  const certifiedAt = storefront?.certifiedAt || seller.certifiedAt || null
+  useEffect(() => {
+    window.scrollTo({ top: 0 })
+  }, [])
   const list = useMemo(() => {
-    const l = [...products]
-    if (sort === 'hot') l.sort((a, b) => b.sold - a.sold)
+    const q = keyword.trim().toLowerCase()
+    const l = products.filter((item) => {
+      if (storeCategory !== '全部' && item.category !== storeCategory) return false
+      if (q && !item.name.toLowerCase().includes(q)) return false
+      return true
+    })
+    if (sort === 'hot') l.sort((a, b) => (b.verifiedSold ?? 0) - (a.verifiedSold ?? 0))
     if (sort === 'price') l.sort((a, b) => a.price - b.price)
     return l
-  }, [products, sort])
+  }, [products, sort, storeCategory, keyword])
+  const publicName = storefront?.storeName || seller.name
+  const featured = (storefront?.featuredIds ?? []).flatMap((id) => {
+    const product = products.find((item) => item.id === id)
+    return product ? [product] : []
+  })
 
   return (
-    <Modal title={`${seller.name} 的賣場`} onClose={onClose} size="store" z={50}>
+    <section aria-label={`${publicName} 的賣場`} className={`-mx-4 min-h-[70vh] overflow-hidden md:mx-0 md:mt-4 md:rounded-3xl md:border ${theme.page} ${theme.ink} ${theme.line}`}>
       <div>
-        <div className={`relative h-28 w-full bg-gradient-to-r ${seller.bannerClass} sm:h-36 ${closed ? 'grayscale' : ''}`}>
-          <div
-            aria-hidden
-            className="absolute inset-0 opacity-30 [background-image:radial-gradient(#ffffff_1.2px,transparent_1.2px)] [background-size:18px_18px]"
-          />
-          <p className="absolute bottom-3 right-4 hidden max-w-[60%] text-right text-sm font-bold text-card drop-shadow sm:block">
-            {seller.tagline}
-          </p>
+        <div className="flex items-center gap-2 px-4 py-3">
+          <button type="button" onClick={onClose} className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-bold ${theme.chipOff}`}>
+            <ArrowLeft className="size-4" />{backLabel}
+          </button>
+        </div>
+        {bannerNote && (
+          <div role="status" className="flex flex-wrap items-center gap-3 border-y border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm">
+            <p className="min-w-0 flex-1 font-bold text-amber-200">{bannerNote.title}<span className="mt-1 block text-xs font-medium text-amber-100/80">{bannerNote.detail}</span></p>
+            {bannerNote.action && bannerNote.onAction && (
+              <button type="button" onClick={bannerNote.onAction} className="rounded-full bg-card px-4 py-2 text-xs font-black text-foreground">{bannerNote.action}</button>
+            )}
+          </div>
+        )}
+        <div className={`relative h-44 w-full overflow-hidden bg-gradient-to-br sm:h-56 md:h-64 ${theme.banner} ${closed ? 'grayscale' : ''}`}>
+          <div aria-hidden className={`absolute -right-8 -top-12 size-48 rounded-full opacity-50 blur-2xl ${theme.decor}`} />
+          <div aria-hidden className={`absolute bottom-0 left-0 h-1.5 w-full ${theme.decor}`} />
+          {storefront?.bannerUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={storefront.bannerUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+          )}
+          <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent" />
+          {storefront?.intro && (
+            <p className="absolute bottom-4 right-4 hidden max-w-[60%] text-right text-sm font-bold leading-relaxed text-white drop-shadow sm:line-clamp-3 sm:block">
+              {storefront.intro}
+            </p>
+          )}
         </div>
         <div className="flex flex-col items-center gap-3 p-4 text-center sm:flex-row sm:items-start sm:text-left">
-          <div className="relative z-10 -mt-12 size-20 shrink-0 overflow-hidden rounded-full border-4 border-card shadow-md">
-            <Avatar seller={seller} size="size-full" />
+          <div className={`relative z-10 -mt-12 size-20 shrink-0 overflow-hidden rounded-full border-4 shadow-md sm:size-24 ${theme.logoRing}`}>
+            <Avatar seller={storefront?.logoUrl ? { ...seller, logo: storefront.logoUrl } : seller} size="size-full" />
           </div>
           <div className="flex min-w-0 flex-1 flex-col items-center gap-2 sm:items-start">
             <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 sm:justify-start">
-              <h3 className="min-w-0 whitespace-normal break-words text-lg font-black leading-snug sm:text-xl">{seller.name}</h3>
+              <h3 className="min-w-0 whitespace-normal break-words text-lg font-black leading-snug sm:text-2xl">{publicName}</h3>
               {seller.verify === 'approved' && (
                 <span className="inline-flex items-center gap-1">
                   <VerifiedBadge label />
@@ -3002,31 +3307,31 @@ function StoreModal({
               {checkin && !closed && <CheckinBadge />}
               {closed && (suspended ? <Pill tone="bad"><Ban className="size-3" />已停權</Pill> : <Pill tone="neutral"><Clock className="size-3" />系統維護中</Pill>)}
             </div>
-            <p className="text-pretty text-xs font-medium text-muted-foreground sm:hidden">{seller.tagline}</p>
-            <div className="flex flex-wrap justify-center gap-4 text-xs text-muted-foreground sm:justify-start sm:text-sm">
-              <Stars value={seller.rating} />
-              <span className="inline-flex items-center gap-1"><Users className="size-3.5" />{(seller.followers + (followed ? 1 : 0)).toLocaleString('en-US')} 粉絲</span>
+            {storefront?.intro && <p className={`text-pretty text-sm font-medium sm:hidden ${theme.muted}`}>{storefront.intro}</p>}
+            <div className={`flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs sm:justify-start sm:text-sm ${theme.muted}`}>
+              <StoreReputationView certifiedAt={certifiedAt} />
+              <span className="inline-flex items-center gap-1"><Users className="size-3.5" />{seller.userId ? `${followCount.toLocaleString('en-US')} 粉絲` : '粉絲數尚無公開紀錄'}</span>
               <span className="inline-flex items-center gap-1"><MapPin className="size-3.5" />{seller.city}</span>
               <span>商品 {products.length}</span>
             </div>
           </div>
-          <div className="mt-2 flex w-full gap-2 sm:w-auto">
-            <button type="button" onClick={onChat} className={`${btnPrimary} flex-1 bg-emerald-600 hover:bg-emerald-700 sm:flex-none`}>
+          <div className="mt-2 flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
+            <button type="button" onClick={onChat} className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-5 py-2.5 text-sm font-bold shadow-sm transition active:scale-[0.98] sm:flex-none ${theme.action}`}>
               <MessageCircle className="size-4" /> 聯繫賣家客服
             </button>
             <button
               type="button"
               onClick={onFollow}
               aria-pressed={followed}
-              className={`${followed ? btnGhost : btnPrimary} flex-1 sm:flex-none`}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-sm font-bold transition active:scale-[0.98] sm:flex-none ${followed ? theme.chipOff : theme.action}`}
             >
-              {followed ? <><Heart className="size-4 fill-primary text-primary" /> 已關注</> : <><Plus className="size-4" /> 關注</>}
+              {followed ? <><Heart className="size-4 fill-current" /> 已關注</> : <><Plus className="size-4" /> 關注</>}
             </button>
             <button
               type="button"
               onClick={() => (viewer ? setReportOpen(true) : onNeedLogin?.())}
               aria-label="檢舉此賣家"
-              className={`${btnGhost} px-3 hover:text-destructive`}
+              className={`inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-2.5 text-sm font-bold ${theme.chipOff}`}
             >
               <Flag className="size-4" />
               <span className="hidden sm:inline">檢舉此賣家</span>
@@ -3034,7 +3339,7 @@ function StoreModal({
           </div>
         </div>
         {!closed && (
-          <div className="mx-4 mb-4 flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className={`mx-4 mb-4 flex flex-col gap-3 rounded-2xl border bg-black/15 p-3 sm:flex-row sm:items-center sm:justify-between ${theme.line}`}>
             <div className="flex min-w-0 items-center gap-3">
               <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-400">
                 <Ticket className="size-5" />
@@ -3051,7 +3356,7 @@ function StoreModal({
                         .replace(/^/, '本店優惠券：')
                     : '本店目前沒有開放領取或兌換的優惠券'}
                 </p>
-                <p className="text-xs text-muted-foreground">
+                <p className={`text-xs ${theme.muted}`}>
                   {viewer ? `您目前有 ${points} 點，簽到與刮刮卡都能賺點數` : '登入買家帳號後即可領取或用簽到點數兌換'}
                 </p>
               </div>
@@ -3060,7 +3365,7 @@ function StoreModal({
               type="button"
               disabled={redeemCoupons.length + shelfCoupons.length === 0}
               onClick={() => setRedeemOpen(true)}
-              className={`${btnPrimary} shrink-0 disabled:opacity-50`}
+              className={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full px-5 py-2.5 text-sm font-bold shadow-sm transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${theme.action}`}
             >
               <Gift className="size-4" />此賣場可兌換／領取優惠券
             </button>
@@ -3069,11 +3374,11 @@ function StoreModal({
       </div>
 
       {closed ? (
-        <div className="border-t border-border/70 bg-muted/40 p-4">
-          <div role="status" className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border bg-card px-6 py-14 text-center">
+        <div className={`border-t p-4 ${theme.line}`}>
+          <div role="status" className={`flex flex-col items-center gap-3 rounded-2xl border border-dashed bg-black/20 px-6 py-14 text-center ${theme.line}`}>
             <span className="flex size-14 items-center justify-center rounded-full bg-muted text-muted-foreground"><Clock className="size-7" /></span>
             <h4 className="text-lg font-black">{suspended ? '賣場已停權 / 配合平台調查中' : '店鋪系統維護 / 結構升級中'}</h4>
-            <p className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">
+            <p className={`max-w-sm text-pretty text-sm leading-relaxed ${theme.muted}`}>
               {suspended
                 ? `「${seller.name}」因違反平台規範已被停權，所有商品已下架，無法下單。`
                 : `該店鋪正在進行系統維護或結帳升級中，暫時無法下單。商品會在升級完成後自動重新上架，歡迎稍後再來逛逛，也可以先按「關注」，不錯過「${seller.name}」的新品。`}
@@ -3081,35 +3386,66 @@ function StoreModal({
           </div>
         </div>
       ) : (
-      <div className="border-t border-border/70 bg-muted/40">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4">
+      <div className={`border-t ${theme.line}`}>
+        <div className="flex flex-col gap-3 px-4 pt-4 sm:flex-row sm:items-center sm:justify-between">
           <h4 className="text-sm font-black">全部商品（僅顯示本店上架）</h4>
-          <div className="flex gap-1.5" role="group" aria-label="排序">
-            {(
-              [
-                ['hot', '熱銷'],
-                ['new', '最新'],
-                ['price', '價格低到高'],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={sort === id}
-                onClick={() => setSort(id)}
-                className={`rounded-full px-3 py-1 text-xs font-bold transition ${sort === id ? 'bg-foreground text-card' : 'bg-card text-muted-foreground ring-1 ring-border hover:text-foreground'}`}
-              >
-                {label}
+          <label className="relative min-w-0 sm:w-72">
+            <Search className={`pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 ${theme.muted}`} />
+            <input
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="搜尋本店商品"
+              aria-label="搜尋本店商品"
+              className={`w-full rounded-full border bg-black/20 py-2 pl-9 pr-3 text-sm outline-none placeholder:opacity-60 ${theme.line} ${theme.ink}`}
+            />
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-1.5 px-4 pt-3" role="group" aria-label="排序">
+          {(
+            [
+              ['hot', '熱銷'],
+              ['new', '最新'],
+              ['price', '價格低到高'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={sort === id}
+              onClick={() => setSort(id)}
+              className={`rounded-full px-3 py-1 text-xs font-bold transition ${sort === id ? theme.chipOn : theme.chipOff}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {featured.length > 0 && storeCategory === '全部' && keyword.trim() === '' && (
+          <div className="px-4 pt-3">
+            <h4 className="mb-2 text-sm font-black">精選商品</h4>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {featured.map((p) => (
+                <ProductCard key={`featured-${p.id}`} product={p} seller={seller} onOpen={() => onOpenProduct(p.id)} onSimilar={onSimilar ? () => onSimilar(p.id) : undefined} />
+              ))}
+            </div>
+          </div>
+        )}
+        {(storefront?.categories.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-2 px-4 pt-3">
+            {['全部', ...(storefront?.categories ?? [])].map((category) => (
+              <button key={category} type="button" aria-pressed={storeCategory === category} onClick={() => setStoreCategory(category)} className={`rounded-full px-3 py-1 text-xs font-bold ${storeCategory === category ? theme.chipOn : theme.chipOff}`}>
+                {category}
               </button>
             ))}
           </div>
-        </div>
+        )}
         {list.length === 0 ? (
-          <p className="m-4 rounded-2xl border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">此賣場目前沒有上架商品</p>
+          <p className={`m-4 rounded-2xl border border-dashed bg-black/20 p-10 text-center text-sm ${theme.line} ${theme.muted}`}>
+            {products.length === 0 ? '此賣場目前沒有上架商品' : '找不到符合的商品'}
+          </p>
         ) : (
-          <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {list.map((p) => (
-              <ProductCard key={p.id} product={p} seller={seller} checkin={checkin} onOpen={() => onOpenProduct(p.id)} />
+              <ProductCard key={p.id} product={p} seller={seller} checkin={checkin} onOpen={() => onOpenProduct(p.id)} onSimilar={onSimilar ? () => onSimilar(p.id) : undefined} />
             ))}
           </div>
         )}
@@ -3207,98 +3543,13 @@ function StoreModal({
           }}
         />
       )}
-    </Modal>
+    </section>
   )
 }
 
 /* ----------------------------------------------------------------------------
  * 聊聊 Modal
  * -------------------------------------------------------------------------- */
-
-function ChatModal({
-  seller,
-  viewer = null,
-  onClose,
-  onMessage,
-}: {
-  seller: Seller
-  viewer?: Viewer | null
-  onClose: () => void
-  onMessage?: (text: string) => void
-}) {
-  const [msgs, setMsgs] = useState<{ from: 'me' | 'seller'; text: string }[]>([
-    { from: 'seller', text: `您好，歡迎來到「${seller.name}」，有任何問題都可以直接問我！` },
-  ])
-  const [text, setText] = useState('')
-  const [typing, setTyping] = useState(false)
-  const endRef = useRef<HTMLDivElement>(null)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' })
-  }, [msgs, typing])
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
-
-  const send = () => {
-    const t = text.trim()
-    if (!t) return
-    setMsgs((m) => [...m, { from: 'me', text: t }])
-    onMessage?.(t)
-    setText('')
-    setTyping(true)
-    timer.current = setTimeout(() => {
-      setTyping(false)
-      setMsgs((m) => [...m, { from: 'seller', text: '收到！我確認一下庫存與出貨時間，稍後馬上回覆您。' }])
-    }, 1100)
-  }
-
-  return (
-    <Modal title={`與 ${seller.name} 聊聊`} onClose={onClose} size="sm" z={75}>
-      <div className="flex h-[26rem] flex-col">
-        <div className="flex-1 space-y-3 overflow-y-auto bg-muted/40 p-4">
-          {msgs.map((m, i) => (
-            <div key={i} className={`flex items-end gap-2 ${m.from === 'me' ? 'flex-row-reverse' : ''}`}>
-              {m.from === 'me' ? (
-                viewer ? <PerkAvatar viewer={viewer} equipped={viewer.equipped} size="size-8" textSize="text-xs" thickness={2} /> : null
-              ) : (
-                <Avatar seller={seller} size="size-8" />
-              )}
-              <div className={`flex min-w-0 max-w-[75%] flex-col gap-1 ${m.from === 'me' ? 'items-end' : 'items-start'}`}>
-                {m.from === 'me' && viewer && (
-                  <div className="flex flex-wrap items-center justify-end gap-x-1.5 gap-y-1">
-                    <PerkTags equipped={viewer.equipped} />
-                    <span className="text-xs font-bold text-muted-foreground">{viewer.name}</span>
-                  </div>
-                )}
-                <p
-                  className={`rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
-                    m.from === 'me' ? 'rounded-br-md bg-primary text-primary-foreground' : 'rounded-bl-md border border-border/70 bg-card'
-                  }`}
-                >
-                  {m.text}
-                </p>
-              </div>
-            </div>
-          ))}
-          {typing && <p className="text-xs text-muted-foreground">賣家輸入中⋯</p>}
-          <div ref={endRef} />
-        </div>
-        <form
-          className="flex gap-2 border-t border-border/70 p-3"
-          onSubmit={(e) => {
-            e.preventDefault()
-            send()
-          }}
-        >
-          <input className={inputCls} value={text} onChange={(e) => setText(e.target.value)} placeholder="輸入訊息⋯" aria-label="聊天訊息" />
-          <button type="submit" className={`${btnPrimary} px-4`} aria-label="送出訊息">
-            <Send className="size-4" />
-          </button>
-        </form>
-      </div>
-    </Modal>
-  )
-}
 
 /* ----------------------------------------------------------------------------
  * 超商門市選擇器
@@ -3497,12 +3748,7 @@ function CartModal({
     const cardErr = pay === 'card' ? validateCard(card) : {}
     setErrors({ ...e, ...cardErr })
     if (Object.keys(e).length || Object.keys(cardErr).length) return
-    setPayError('')
-    if (pay === 'card') {
-      setSecure(true)
-      return
-    }
-    placeOrder()
+    setPayError('金流尚未啟用。不會建立訂單，也不會把這筆交易標成已付款。')
   }
 
   const placeOrder = () => {
@@ -4077,152 +4323,11 @@ function BankSecureModal({
  * 買家中心
  * -------------------------------------------------------------------------- */
 
-type CenterTab = 'all' | 'unpaid' | 'toShip' | 'shipping' | 'done' | 'coupons' | 'favorites' | 'following' | 'profile' | 'security' | 'support'
+type CenterTab = 'all' | 'unpaid' | 'toShip' | 'shipping' | 'done' | 'cancelled' | 'refund' | 'orderNotices' | 'coupons' | 'favorites' | 'following' | 'profile' | 'security' | 'support'
 
-const STAGE_META: Record<BuyerStage, { label: string; tone: Tone }> = {
-  unpaid: { label: '待付款', tone: 'warn' },
-  toShip: { label: '待出貨', tone: 'brand' },
-  shipping: { label: '待收貨', tone: 'brand' },
-  done: { label: '已完成', tone: 'ok' },
-}
-
-function StarPicker({ value, onChange, label }: { value: number; onChange: (v: number) => void; label: string }) {
-  return (
-    <div role="radiogroup" aria-label={label} className="inline-flex gap-1">
-      {[1, 2, 3, 4, 5].map((i) => (
-        <button
-          key={i}
-          type="button"
-          role="radio"
-          aria-checked={value === i}
-          aria-label={`${i} 顆星`}
-          onClick={() => onChange(i)}
-          className="rounded-md p-0.5 transition hover:scale-110"
-        >
-          <Star className={`size-7 ${i <= value ? 'fill-primary text-primary' : 'fill-muted text-border'}`} />
-        </button>
-      ))}
-    </div>
-  )
-}
-
-const STAR_WORDS = ['', '非常不滿意', '不滿意', '普通', '滿意', '非常滿意']
-
-function OrderReviewModal({
-  order,
-  onClose,
-  onSubmit,
-}: {
-  order: Order
-  onClose: () => void
-  onSubmit: (inputs: ReviewInput[]) => void
-}) {
-  const [inputs, setInputs] = useState<ReviewInput[]>(order.items.map(() => ({ rating: 0, text: '' })))
-  const [error, setError] = useState('')
-  const patch = (i: number, p: Partial<ReviewInput>) => {
-    setError('')
-    setInputs((l) => l.map((x, idx) => (idx === i ? { ...x, ...p } : x)))
-  }
-  const submit = () => {
-    if (inputs.some((x) => x.rating === 0)) return setError('請為每件商品評分')
-    onSubmit(inputs)
-  }
-  return (
-    <Modal title="評價商品" onClose={onClose} size="md" z={70}>
-      <div className="space-y-4 p-5">
-        <p className="text-xs text-muted-foreground">訂單 {order.id}・評價會公開顯示在商品頁面</p>
-        {order.items.map((it, i) => (
-          <section key={`${it.name}-${i}`} className={`${panelCls} space-y-3 p-4`} aria-label={`評價 ${it.name}`}>
-            <div>
-              <p className="text-sm font-black">{it.name}</p>
-              <p className="text-xs text-muted-foreground">{it.variant}</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <StarPicker value={inputs[i].rating} onChange={(v) => patch(i, { rating: v })} label={`${it.name} 評分`} />
-              <span className="text-sm font-bold text-brand-ink">{STAR_WORDS[inputs[i].rating]}</span>
-            </div>
-            <textarea
-              rows={3}
-              maxLength={200}
-              value={inputs[i].text}
-              onChange={(e) => patch(i, { text: e.target.value })}
-              className={inputCls}
-              placeholder="分享你的使用心得（選填，最多 200 字）"
-              aria-label={`${it.name} 心得`}
-            />
-          </section>
-        ))}
-        {error && (
-          <p className="flex items-center gap-1 text-xs font-medium text-destructive" role="alert">
-            <CircleAlert className="size-3.5" />{error}
-          </p>
-        )}
-        <div className="flex gap-2">
-          <button type="button" onClick={onClose} className={`${btnGhost} flex-1`}>稍後再說</button>
-          <button type="button" onClick={submit} className={`${btnPrimary} flex-1`}>送出評價</button>
-        </div>
-      </div>
-    </Modal>
-  )
-}
-
-function TrackModal({
-  order,
-  sellerName,
-  onClose,
-  onAdvance,
-}: {
-  order: Order
-  sellerName: string
-  onClose: () => void
-  onAdvance: () => void
-}) {
-  const stage = order.stage ?? 0
-  const steps = trackSteps(order, sellerName)
-  return (
-    <Modal title="物流動態" onClose={onClose} size="sm" z={70}>
-      <div className="space-y-5 p-5">
-        <dl className="space-y-1.5 rounded-2xl bg-muted/50 p-4 text-sm">
-          <div className="flex justify-between gap-3"><dt className="text-muted-foreground">物流單號</dt><dd className="font-mono font-bold">{order.tracking ?? '--'}</dd></div>
-          <div className="flex justify-between gap-3"><dt className="text-muted-foreground">配送方式</dt><dd className="font-bold">{SHIP[order.shipMethod].label}</dd></div>
-          <div className="flex justify-between gap-3"><dt className="shrink-0 text-muted-foreground">收件地點</dt><dd className="text-right font-bold">{order.shipTo}</dd></div>
-        </dl>
-
-        <ol className="space-y-0" aria-label="物流軌跡">
-          {steps.map((s, i) => {
-            const reached = i <= stage
-            const current = i === stage
-            return (
-              <li key={s.label} className="relative flex gap-3 pb-5 last:pb-0" aria-current={current ? 'step' : undefined}>
-                {i < steps.length - 1 && (
-                  <span aria-hidden className={`absolute left-3 top-7 bottom-0 w-0.5 -translate-x-1/2 ${i < stage ? 'bg-primary' : 'bg-border'}`} />
-                )}
-                <span
-                  className={`relative z-10 flex size-6 shrink-0 items-center justify-center rounded-full border-2 ${
-                    reached ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-transparent'
-                  } ${current ? 'ring-4 ring-primary/25' : ''}`}
-                >
-                  <Check className="size-3.5" />
-                </span>
-                <div className={`min-w-0 flex-1 ${reached ? '' : 'opacity-50'}`}>
-                  <p className={`text-sm font-black ${current ? 'text-brand-ink' : ''}`}>{s.label}</p>
-                  <p className="text-xs leading-relaxed text-muted-foreground">{s.detail}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{reached ? s.time : '尚未更新'}</p>
-                </div>
-              </li>
-            )
-          })}
-        </ol>
-
-        <div className="space-y-2 border-t border-border/60 pt-4">
-          <button type="button" onClick={onAdvance} disabled={stage >= LAST_STAGE} className={`${btnGhost} w-full`}>
-            <Truck className="size-4" />測試：模擬物流前進一站
-          </button>
-          <button type="button" onClick={onClose} className={`${btnPrimary} w-full`}>關閉</button>
-        </div>
-      </div>
-    </Modal>
-  )
+const ORDER_BUCKETS = ['all', 'unpaid', 'toShip', 'shipping', 'done', 'cancelled', 'refund'] as const
+function isOrderBucket(tab: CenterTab): tab is BuyerOrderBucket {
+  return (ORDER_BUCKETS as readonly string[]).includes(tab)
 }
 
 function CopyCodeButton({ code }: { code: string }) {
@@ -4259,7 +4364,7 @@ function WalletPanel({ wallet, sellers, onGoStore }: { wallet: WalletEntry[]; se
   ]
   return (
     <section className="space-y-4" aria-label="我的優惠券">
-      <div role="tablist" aria-label="優惠券狀態" className="flex gap-2">
+      <div role="tablist" aria-label="優惠券狀態" className="flex flex-wrap gap-2">
         {FILTERS.map((f) => (
           <button
             key={f.id}
@@ -4295,7 +4400,7 @@ function WalletPanel({ wallet, sellers, onGoStore }: { wallet: WalletEntry[]; se
                 </div>
                 <div className="min-w-0 flex-1 space-y-1 p-3 text-xs">
                   <p className="truncate text-sm font-black">{sellers.find((s) => s.id === w.sellerId)?.name ?? '指定店家'}</p>
-                  <p className="text-muted-foreground">折扣碼 <b className="font-mono text-foreground">{w.code}</b>・滿 {money(w.minSpend)} 可用</p>
+                  <p className="break-all text-muted-foreground">折扣碼 <b className="font-mono text-foreground">{w.code}</b>・滿 {money(w.minSpend)} 可用</p>
                   <p className="text-muted-foreground">有效期限至 {w.expiresAt.replace(/-/g, '/')}</p>
                   {filter === 'unused' && (
                     <>
@@ -4322,140 +4427,16 @@ function WalletPanel({ wallet, sellers, onGoStore }: { wallet: WalletEntry[]; se
   )
 }
 
-function shipOverdueDays(o: Order, seller?: Seller) {
-  const limit = seller?.shipDays ?? 3
-  const t = Date.parse(o.date.replace(/\//g, '-'))
-  if (Number.isNaN(t)) return 0
-  return Math.max(0, Math.floor((Date.now() - t) / 86400000) - limit)
-}
-
-function sellerKycDone(seller?: Seller) {
-  return Boolean(seller?.kyc?.idVerified && seller.kyc.phoneVerified && seller.kyc.bankVerified)
-}
-
-function RemitModal({
-  order,
-  seller,
-  onClose,
-  onSubmit,
-}: {
-  order: Order
-  seller?: Seller
-  onClose: () => void
-  onSubmit: (last5: string, fileName?: string) => void
-}) {
-  const [last5, setLast5] = useState(order.remit?.last5 ?? '')
-  const [fileName, setFileName] = useState(order.remit?.fileName ?? '')
-  const [error, setError] = useState('')
-  const pay = seller?.payment
-  const submit = () => {
-    if (!/^\d{5}$/.test(last5)) return setError('請輸入轉出帳號後 5 碼')
-    onSubmit(last5, fileName || undefined)
-  }
-  return (
-    <Modal title="填寫匯款資料並建立存證" onClose={onClose} size="md" z={70}>
-      <div className="space-y-4 p-5">
-        <div className="space-y-2 rounded-2xl bg-muted/60 p-4 text-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-black">{seller?.name ?? '賣家'}</span>
-            {sellerKycDone(seller) ? (
-              <Pill tone="ok"><ShieldCheck className="size-3" />實名已驗證</Pill>
-            ) : (
-              <Pill tone="warn"><TriangleAlert className="size-3" />實名認證未完成</Pill>
-            )}
-          </div>
-          {pay ? (
-            <p className="text-xs leading-relaxed">收款銀行 {pay.bankCode}・帳號 <b className="font-black">{pay.bankAccount}</b>・戶名 {pay.bankHolder}</p>
-          ) : (
-            <p className="text-xs leading-relaxed text-muted-foreground">賣家尚未公開收款帳號，請先透過「聯絡賣家」確認匯款資訊。</p>
-          )}
-          <p className="text-xs text-muted-foreground">應匯金額 {money(order.total)}</p>
-        </div>
-        <div className="space-y-1">
-          <label htmlFor="remit-last5" className="text-xs font-bold">匯款帳號後 5 碼</label>
-          <input id="remit-last5" inputMode="numeric" maxLength={5} className={inputCls} placeholder="12345" value={last5} onChange={(e) => { setLast5(e.target.value.replace(/\D/g, '')); setError('') }} aria-invalid={Boolean(error)} />
-          {error && <p className="text-xs font-bold text-destructive" role="alert">{error}</p>}
-        </div>
-        <div className="space-y-1">
-          <label htmlFor="remit-file" className="text-xs font-bold">匯款截圖（選填）</label>
-          <input id="remit-file" type="file" accept="image/*" className={inputCls} onChange={(e) => setFileName(e.target.files?.[0]?.name ?? '')} />
-        </div>
-        <button type="button" onClick={submit} className={`${btnPrimary} w-full justify-center`}><ShieldCheck className="size-4" />產生數位交易存證</button>
-      </div>
-    </Modal>
-  )
-}
-
-function PoliceCertModal({ order, seller, reason, onClose }: { order: Order; seller?: Seller; reason: string; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const pay = seller?.payment
-  const print = () => {
-    const w = window.open('', '_blank', 'width=820,height=960')
-    if (!w) return
-    w.document.write(
-      `<html><head><title>報案與消保申訴憑證</title><style>body{font-family:sans-serif;padding:28px;color:#111}h1{font-size:20px;margin:0 0 4px}p{font-size:13px;line-height:1.6;margin:4px 0}table{border-collapse:collapse;width:100%;margin:12px 0}td,th{border:1px solid #888;padding:6px 8px;font-size:13px;text-align:left}th{background:#f3f3f3;width:28%}</style></head><body>${ref.current?.innerHTML ?? ''}</body></html>`,
-    )
-    w.document.close()
-    w.focus()
-    w.print()
-  }
-  const row = (k: string, v: string) => (
-    <tr key={k}>
-      <th>{k}</th>
-      <td>{v}</td>
-    </tr>
-  )
-  return (
-    <Modal title="警察局報案 / 消保申訴專用憑證（PDF 預覽）" onClose={onClose} size="lg" z={80}>
-      <div className="space-y-4 p-5">
-        <div ref={ref} className="space-y-2 rounded-2xl border border-border bg-card p-5 text-sm">
-          <h1 className="text-lg font-black">交易糾紛存證憑證</h1>
-          <p className="text-xs text-muted-foreground">本文件由買個 Pay 服依買家提供之交易紀錄自動產生，僅供報案、凍結帳戶或消保申訴時參考，不代表平台對事實之認定。</p>
-          <table className="w-full border-collapse text-xs">
-            <tbody>
-              {row('憑證編號', `CERT-${order.id}`)}
-              {row('產生時間', new Date().toLocaleString('zh-TW'))}
-              {row('檢舉原因', reason)}
-              {row('訂單編號', order.id)}
-              {row('下單日期', order.date)}
-              {row('買家', order.buyer)}
-              {row('商品明細', order.items.map((i) => `${i.name} x${i.qty}`).join('、'))}
-              {row('訂單金額', money(order.total))}
-              {row('付款方式', order.pay === 'card' ? '信用卡' : 'ATM 銀行轉帳')}
-              {row('匯款存證', order.remit ? `後 5 碼 ${order.remit.last5}・存證編號 ${order.remit.ref}・${order.remit.at}${order.remit.fileName ? `・截圖 ${order.remit.fileName}` : ''}` : '買家尚未上傳匯款資料')}
-              {row('賣場名稱', seller?.name ?? '未知賣家')}
-              {row('賣家負責人', seller?.owner ?? '未知')}
-              {row('身分證 / 統編', seller?.idNo ?? '未知')}
-              {row('賣家手機', seller?.kyc?.phone || '未提供')}
-              {row('收款銀行帳戶', pay ? `${pay.bankCode}-${pay.bankAccount}（戶名 ${pay.bankHolder}）` : '賣家未提供收款帳戶')}
-            </tbody>
-          </table>
-        </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <button type="button" onClick={onClose} className={btnGhost}>關閉</button>
-          <button type="button" onClick={print} className={btnPrimary}><FileText className="size-4" />列印 / 儲存為 PDF</button>
-        </div>
-      </div>
-    </Modal>
-  )
-}
-
 function BuyerCenterModal({
   wallet,
   orders,
   products,
   sellers,
   buyerName,
+  buyerUserId,
+  nickname = '',
   onClose,
-  onAdvance,
-  onReceive,
-  onReview,
-  onPaid,
-  onUrge,
-  onRemit,
-  onScamReport,
   onContact,
-  onRefund,
   onGoStore,
   favorites,
   onToggleFav,
@@ -4466,6 +4447,10 @@ function BuyerCenterModal({
   onUnfollow,
   tone,
   nameChangedAt,
+  nicknameInitialized = false,
+  canRename = true,
+  nextRenameAt = null,
+  myReviews = [],
   onRename,
   onAvatar,
   avatar,
@@ -4477,6 +4462,7 @@ function BuyerCenterModal({
   onReadTicket,
   onNotify,
   equipped,
+  onNoticesChanged,
 }: {
   equipped: EquippedPerks
   onGoStore: (sellerId: string) => void
@@ -4489,25 +4475,32 @@ function BuyerCenterModal({
   onUnfollow: (id: string) => void
   tone: number
   nameChangedAt?: string
-  onRename: (n: string) => void
+  nicknameInitialized?: boolean
+  canRename?: boolean
+  nextRenameAt?: string | null
+  myReviews?: { id: string; productName: string; rating: number; body: string; createdAt: string }[]
+  onRename: (n: string) => Promise<string | void> | string | void
   onAvatar: (i: number) => void
   avatar?: string
-  onAvatarUpload: (dataUrl: string) => void
-  onAvatarRemove: () => void
+  onAvatarUpload: (dataUrl: string) => Promise<string | void> | string | void
+  onAvatarRemove: () => Promise<string | void> | string | void
   onSwitchSeller: () => void
   tickets: SupportTicket[]
   onSubmitTicket: (t: { category: string; subject: string; body: string }) => void
   onReadTicket: (id: string) => void
   onNotify: (m: string) => void
+  onNoticesChanged?: () => void
   wallet: WalletEntry[]
   orders: Order[]
   products: Product[]
   sellers: Seller[]
   buyerName: string
+  buyerUserId?: string
+  nickname?: string
   onClose: () => void
   onAdvance: (id: string) => void
   onReceive: (id: string) => void
-  onReview: (id: string, inputs: ReviewInput[]) => void
+  onReview: (id: string, inputs: ReviewInput[]) => Promise<string | void>
   onPaid: (id: string) => void
   onUrge: (id: string) => void
   onRemit: (id: string, last5: string, fileName?: string) => void
@@ -4516,47 +4509,45 @@ function BuyerCenterModal({
   onRefund: (id: string, r: { type: RefundType; reason: string; note: string }) => void
 }) {
   const [tab, setTab] = useState<CenterTab>('all')
-  const [trackId, setTrackId] = useState<string | null>(null)
-  const [reviewId, setReviewId] = useState<string | null>(null)
-  const [refundId, setRefundId] = useState<string | null>(null)
-  const refundOrder = orders.find((o) => o.id === refundId)
-
-  const sorted = useMemo(() => [...orders].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)), [orders])
-  const count = (s: BuyerStage) => orders.filter((o) => buyerStage(o) === s).length
-  const list = tab === 'all' ? sorted : sorted.filter((o) => buyerStage(o) === tab)
-  const trackOrder = orders.find((o) => o.id === trackId)
-  const reviewOrder = orders.find((o) => o.id === reviewId)
+  const [focusOrderId, setFocusOrderId] = useState<string | null>(null)
+  const [doneCount, setDoneCount] = useState(0)
   const seller = (id: string) => sellers.find((s) => s.id === id)
-  const [remitId, setRemitId] = useState<string | null>(null)
-  const [certId, setCertId] = useState<string | null>(null)
-  const remitOrder = remitId ? orders.find((x) => x.id === remitId) : undefined
-  const certOrder = certId ? orders.find((x) => x.id === certId) : undefined
-  const thumb = (o: Order, it: OrderItem) =>
-    (products.find((p) => p.id === it.productId) ?? products.find((p) => p.sellerId === o.sellerId && p.name === it.name))?.image ?? ''
+  useEffect(() => {
+    let stop = false
+    void listMyBuyerOrders('done').then((result) => {
+      if (!stop && result.data) setDoneCount(result.data.length)
+    })
+    return () => { stop = true }
+  }, [])
+  void orders
 
   return (
     <>
-      <Modal title={`買家中心・${buyerName}`} onClose={onClose} size="lg" z={60}>
+      <Modal title={`買家中心・${buyerName}`} onClose={onClose} size="center" z={60}>
         <BuyerProfileHeader
           name={buyerName}
           tone={tone}
           avatar={avatar}
-          completed={count('done')}
+          completed={doneCount}
           onEdit={() => setTab('profile')}
           avatarNode={<PerkAvatar viewer={{ name: buyerName, tone, avatar }} equipped={equipped} />}
           tags={<PerkTags equipped={equipped} />}
           skinStyle={skinStyleFor(equipped)}
         />
-        <div className="sticky top-0 z-10 border-b border-border/60 bg-card px-4 py-3">
+        <div className="sticky top-0 z-10 min-w-0 border-b border-border/60 bg-card px-3 py-2.5 sm:px-6 sm:py-3">
           <Tabs<CenterTab>
+            variant="scroll"
             value={tab}
             onChange={setTab}
             tabs={[
               { id: 'all', label: '全部訂單' },
-              { id: 'unpaid', label: '未付款', badge: count('unpaid') },
-              { id: 'toShip', label: '待出貨', badge: count('toShip') },
-              { id: 'shipping', label: '待收貨 / 物流動態', badge: count('shipping') },
+              { id: 'unpaid', label: '待付款' },
+              { id: 'toShip', label: '待出貨' },
+              { id: 'shipping', label: '待收貨' },
               { id: 'done', label: '已完成' },
+              { id: 'cancelled', label: '已取消' },
+              { id: 'refund', label: '退款' },
+              { id: 'orderNotices', label: '訂單通知' },
               { id: 'coupons', label: '我的優惠券', badge: wallet.filter((w) => walletStatus(w) === 'unused').length },
               { id: 'favorites', label: '我的收藏', badge: favorites.length },
               { id: 'following', label: '關注賣家', badge: followed.length },
@@ -4567,12 +4558,24 @@ function BuyerCenterModal({
           />
         </div>
 
-        <div className="space-y-4 p-4">
+        <div className="min-w-0 space-y-4 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-6 sm:py-5">
           {tab === 'favorites' ? (
             <FavoritesPanel
-              items={favorites.flatMap((id) => {
+              items={favorites.map((id) => {
                 const p = products.find((x) => x.id === id)
-                return p ? [{ id: p.id, name: p.name, price: p.price, soldOut: p.stock === 0, sellerName: seller(p.sellerId)?.name ?? '' }] : []
+                const owner = p ? seller(p.sellerId) : undefined
+                const visible = !!p && p.active && !p.draft && !p.flagged && !priceReviewBlocksPublic(p) && (!owner || (owner.verify === 'approved' && !isOffline(owner)))
+                if (!p || !visible) {
+                  return { id, name: '此商品目前無法公開查看', price: 0, soldOut: false, sellerName: '內容已依商品權限隱藏', unavailable: true }
+                }
+                return {
+                  id: p.id,
+                  name: p.name,
+                  price: p.price,
+                  soldOut: p.stock === 0,
+                  sellerName: owner?.name || '賣場',
+                  purchaseLabel: p.stock === 0 ? '已售完' : '可購買',
+                }
               })}
               renderThumb={(id) => <ProductImage src={products.find((p) => p.id === id)?.image ?? ''} alt="" />}
               onOpen={onOpenProduct}
@@ -4580,248 +4583,74 @@ function BuyerCenterModal({
             />
           ) : tab === 'following' ? (
             <FollowingPanel
-              sellers={followed.flatMap((id) => {
-                const sl = seller(id)
-                return sl ? [{ id: sl.id, name: sl.name, city: sl.city }] : []
+              sellers={followed.map((id) => {
+                const sl = sellers.find((item) => item.userId === id && item.verify === 'approved')
+                return sl
+                  ? { id, name: sl.name, city: sl.city || '台灣' }
+                  : { id, name: '此賣場目前無法公開查看', city: '未顯示未核准或敏感資料' }
               })}
               prefs={followPrefs}
               renderAvatar={(id) => {
-                const sl = seller(id)
-                return sl ? <Avatar seller={sl} size="size-11" /> : null
+                const sl = sellers.find((item) => item.userId === id && item.verify === 'approved')
+                return sl ? <Avatar seller={sl} size="size-11" /> : <span className="flex size-11 items-center justify-center rounded-2xl bg-muted text-xs">店</span>
               }}
               onToggle={onFollowPref}
               onUnfollow={onUnfollow}
               onGoStore={onGoStore}
             />
           ) : tab === 'profile' ? (
+            <>
             <BuyerProfilePanel
-              name={buyerName}
+              name={nickname}
               tone={tone}
               avatar={avatar}
               onAvatarUpload={onAvatarUpload}
               onAvatarRemove={onAvatarRemove}
               nameChangedAt={nameChangedAt}
-              completed={count('done')}
+              nicknameInitialized={nicknameInitialized}
+              canRename={canRename}
+              nextRenameAt={nextRenameAt}
+              completed={doneCount}
               onRename={onRename}
               onAvatar={onAvatar}
               onSwitchSeller={onSwitchSeller}
               avatarNode={<PerkAvatar viewer={{ name: buyerName, tone, avatar }} equipped={equipped} size="size-20" textSize="text-3xl" />}
               tags={<PerkTags equipped={equipped} large />}
             />
+            {myReviews.length === 0 ? (
+              <p className="rounded-2xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">尚無評價紀錄。真實訂單完成並達到評價資格後，才會出現在這裡。</p>
+            ) : (
+              <ul className="space-y-2" aria-label="我的評價">
+                {myReviews.map((review) => (
+                  <li key={review.id} className="rounded-2xl border border-border/70 p-3 text-sm">
+                    <p className="font-bold">{review.productName}</p>
+                    <p className="text-xs text-muted-foreground">{review.rating} 顆星・{review.createdAt.slice(0, 16).replace('T', ' ')}</p>
+                    <p className="mt-1 whitespace-pre-wrap">{review.body || '未留下文字心得'}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+            </>
           ) : tab === 'security' ? (
             <SecurityPanel onNotify={onNotify} />
           ) : tab === 'support' ? (
-            <SupportCenter role="buyer" author={buyerName} tickets={tickets} onSubmit={onSubmitTicket} onRead={onReadTicket} />
+            <SupportCenter role="buyer" author={buyerName} userId={buyerUserId} tickets={tickets} onSubmit={onSubmitTicket} onRead={onReadTicket} />
           ) : tab === 'coupons' ? (
             <WalletPanel wallet={wallet} sellers={sellers} onGoStore={onGoStore} />
-          ) : list.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 py-14 text-center">
-              <Receipt className="size-12 text-border" />
-              <p className="text-sm text-muted-foreground">這個分類目前沒有訂單</p>
-            </div>
-          ) : (
-            list.map((o) => {
-              const stage = buyerStage(o)
-              const meta = STAGE_META[stage]
-              const arrived = (o.stage ?? 0) >= LAST_STAGE
-              const latest = trackSteps(o, seller(o.sellerId)?.name ?? '賣家')[Math.min(o.stage ?? 0, LAST_STAGE)]
-              return (
-                <article key={o.id} className={`${panelCls} overflow-hidden`} aria-label={`訂單 ${o.id}`}>
-                  <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/60 bg-muted/50 px-4 py-2.5">
-                    <Store className="size-4 text-brand-ink" />
-                    <span className="text-sm font-black">{seller(o.sellerId)?.name}</span>
-                    <span className="font-mono text-xs text-muted-foreground">{o.id}</span>
-                    <span className="ml-auto"><Pill tone={meta.tone}>{meta.label}</Pill></span>
-                  </header>
-
-                  <ul className="divide-y divide-border/60">
-                    {o.items.map((it, i) => (
-                      <li key={`${it.name}-${i}`} className="flex gap-3 p-4">
-                        <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70">
-                          <ProductImage src={thumb(o, it)} alt={it.name} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="line-clamp-2 text-sm font-bold">{it.name}</p>
-                          <p className="text-xs text-muted-foreground">{it.variant}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">x{it.qty}</p>
-                        </div>
-                        <p className="text-sm font-bold">{money(it.price * it.qty)}</p>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <footer className="space-y-3 border-t border-border/60 bg-muted/30 px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                      <span className="text-xs text-muted-foreground">
-                        {o.date.replace(/-/g, '/')}・{o.pay === 'card' ? '信用卡' : 'ATM 轉帳'}・{SHIP[o.shipMethod].label}
-                      </span>
-                      <span>
-                        訂單金額 <b className="text-lg font-black text-brand-ink">{money(o.total)}</b>
-                      </span>
-                    </div>
-
-                    <PayoutStatus released={stage === 'done'} paid={o.payStatus === '已付款'} />
-                    {stage === 'unpaid' && (
-                      <div className="rounded-xl bg-secondary p-3 text-xs leading-relaxed text-secondary-foreground">
-                        <p className="font-bold">轉帳帳號：{atmAccount(o)}</p>
-                        <p>請於 3 日內完成匯款，入帳後賣家才會出貨。</p>
-                      </div>
-                    )}
-                    {stage === 'shipping' && (
-                      <div className="flex items-start gap-2 rounded-xl bg-accent p-3 text-xs leading-relaxed text-accent-foreground">
-                        <Truck className="mt-0.5 size-4 shrink-0" />
-                        <div>
-                          <p className="font-bold">{latest.label}</p>
-                          <p>{latest.time}・物流單號 {o.tracking}</p>
-                        </div>
-                      </div>
-                    )}
-
-                    {o.remit && (
-                      <div className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 p-3 text-xs leading-relaxed text-emerald-300">
-                        <p className="flex items-center gap-1.5 font-black"><ShieldCheck className="size-4" />數位交易存證卡片</p>
-                        <p className="mt-1">存證編號 {o.remit.ref}・訂單 {o.id}・金額 {money(o.total)}</p>
-                        <p>匯款帳號後 5 碼 {o.remit.last5}{o.remit.fileName ? `・截圖 ${o.remit.fileName}` : ''}・{o.remit.at}</p>
-                      </div>
-                    )}
-                    {stage === 'toShip' && shipOverdueDays(o, seller(o.sellerId)) > 0 && (
-                      <div role="alert" className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-xs font-bold text-destructive">
-                        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-                        <p>賣家逾期未出貨（已超過承諾出貨天數 {shipOverdueDays(o, seller(o.sellerId))} 天）。您可以一鍵催單，或檢舉詐騙 / 未出貨。</p>
-                      </div>
-                    )}
-
-                    {o.refund && (
-                      <div className="rounded-xl border border-border bg-card p-3 text-xs leading-relaxed">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-bold">{o.refund.type === 'return' ? '退貨退款申請' : '退款申請'}</span>
-                          <Pill tone={o.refund.status === 'pending' ? 'warn' : o.refund.status === 'accepted' ? 'ok' : 'bad'}>
-                            {o.refund.status === 'pending' ? '等待賣家回覆' : o.refund.status === 'accepted' ? '賣家已同意' : '賣家已拒絕'}
-                          </Pill>
-                          <span className="ml-auto text-muted-foreground">{o.refund.at.replace(/-/g, '/')}</span>
-                        </div>
-                        <p className="mt-1 text-muted-foreground">原因：{o.refund.reason}{o.refund.note ? `・${o.refund.note}` : ''}</p>
-                        {o.refund.status !== 'pending' && (
-                          <p className="mt-1 font-bold">請直接透過「聯絡賣家」與店鋪確認後續退款或退貨方式。</p>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button type="button" onClick={() => onContact(o.sellerId)} className={btnGhost}>
-                        <Mail className="size-4" />聯絡賣家
-                      </button>
-                      {stage !== 'unpaid' && !o.refund && (
-                        <button type="button" onClick={() => setRefundId(o.id)} className={btnGhost}>
-                          <Undo2 className="size-4" />退貨 / 退款申請
-                        </button>
-                      )}
-                      {stage === 'unpaid' && (
-                        <>
-                          <button type="button" onClick={() => setRemitId(o.id)} className={btnGhost}>
-                            <ShieldCheck className="size-4" />{o.remit ? '更新匯款存證' : '填寫匯款資料'}
-                          </button>
-                          <button type="button" onClick={() => onPaid(o.id)} className={btnGhost}>
-                            <Banknote className="size-4" />測試：模擬完成匯款
-                          </button>
-                        </>
-                      )}
-                      {stage === 'toShip' && (
-                        <>
-                          <button type="button" onClick={() => onUrge(o.id)} className={btnGhost}>
-                            {shipOverdueDays(o, seller(o.sellerId)) > 0 ? '一鍵催單' : '提醒賣家出貨'}
-                          </button>
-                          {shipOverdueDays(o, seller(o.sellerId)) > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onScamReport(o.id, '賣家逾期未出貨')
-                                setCertId(o.id)
-                              }}
-                              className={`${btnGhost} text-destructive`}
-                            >
-                              <TriangleAlert className="size-4" />檢舉詐騙 / 未出貨
-                            </button>
-                          )}
-                        </>
-                      )}
-                      {stage === 'shipping' && (
-                        <>
-                          <button type="button" onClick={() => setTrackId(o.id)} className={btnGhost}>
-                            <Truck className="size-4" />查看物流
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!arrived}
-                            title={arrived ? undefined : '包裹抵達後即可確認收貨'}
-                            onClick={() => onReceive(o.id)}
-                            className={btnPrimary}
-                          >
-                            <Check className="size-4" />確認收貨
-                          </button>
-                        </>
-                      )}
-                      {stage === 'done' &&
-                        (o.reviewed ? (
-                          <Pill tone="ok"><Check className="size-3" />已評價</Pill>
-                        ) : (
-                          <button type="button" onClick={() => setReviewId(o.id)} className={btnPrimary}>
-                            <Star className="size-4" />評價商品
-                          </button>
-                        ))}
-                    </div>
-                  </footer>
-                </article>
-              )
-            })
-          )}
+          ) : tab === 'orderNotices' ? (
+            <OrderNotifications
+              onOpenOrder={(id) => {
+                setFocusOrderId(id)
+                setTab('all')
+              }}
+              onChanged={onNoticesChanged}
+            />
+          ) : isOrderBucket(tab) ? (
+            <BuyerOrdersPanel bucket={tab} focusOrderId={focusOrderId} onContact={onContact} />
+          ) : null}
           <DisclaimerNote />
         </div>
       </Modal>
-
-      {remitOrder && (
-        <RemitModal
-          order={remitOrder}
-          seller={seller(remitOrder.sellerId)}
-          onClose={() => setRemitId(null)}
-          onSubmit={(last5, fileName) => {
-            onRemit(remitOrder.id, last5, fileName)
-            setRemitId(null)
-          }}
-        />
-      )}
-      {certOrder && <PoliceCertModal order={certOrder} seller={seller(certOrder.sellerId)} reason="賣家逾期未出貨" onClose={() => setCertId(null)} />}
-
-      {refundOrder && (
-        <RefundModal
-          order={refundOrder}
-          sellerName={seller(refundOrder.sellerId)?.name ?? '賣家'}
-          onClose={() => setRefundId(null)}
-          onSubmit={(r) => {
-            onRefund(refundOrder.id, r)
-            setRefundId(null)
-          }}
-        />
-      )}
-
-      {trackOrder && (
-        <TrackModal
-          order={trackOrder}
-          sellerName={seller(trackOrder.sellerId)?.name ?? '賣家'}
-          onClose={() => setTrackId(null)}
-          onAdvance={() => onAdvance(trackOrder.id)}
-        />
-      )}
-      {reviewOrder && (
-        <OrderReviewModal
-          order={reviewOrder}
-          onClose={() => setReviewId(null)}
-          onSubmit={(inputs) => {
-            onReview(reviewOrder.id, inputs)
-            setReviewId(null)
-          }}
-        />
-      )}
     </>
   )
 }
@@ -5066,7 +4895,7 @@ function ProductFormModal({
 }: {
   product: Product | null
   sellerId: string
-  onSave: (p: Product) => void
+  onSave: (p: Product) => void | Promise<void>
   onClose: () => void
 }) {
   const [name, setName] = useState(product?.name ?? '')
@@ -5094,9 +4923,138 @@ function ProductFormModal({
   const [optPrice, setOptPrice] = useState<Record<string, string>>(() => readOptionMap(product, 'optionPrice'))
   const [specs, setSpecs] = useState(product?.specs.map(([k, v]) => `${k}：${v}`).join('\n') ?? '')
   const [image, setImage] = useState(product?.image ?? IMAGE_OPTIONS[0].src)
+  const [localPreview, setLocalPreview] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+  const [uploadError, setUploadError] = useState('')
+  const [uploadBusy, setUploadBusy] = useState(false)
+  const uploadSeq = useRef(0)
+  const uploadXhr = useRef<XMLHttpRequest | null>(null)
+  const localPreviewRef = useRef<string | null>(null)
+  const imageSectionRef = useRef<HTMLDivElement>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [agreed, setAgreed] = useState(false)
+  const [saving, setSaving] = useState(false)
   const alertRef = useRef<HTMLDivElement>(null)
+  const clearLocalPreview = () => {
+    if (localPreviewRef.current) URL.revokeObjectURL(localPreviewRef.current)
+    localPreviewRef.current = null
+    setLocalPreview(null)
+  }
+  const stopImageUpload = () => {
+    uploadSeq.current += 1
+    uploadXhr.current?.abort()
+    uploadXhr.current = null
+    setUploadBusy(false)
+    setUploadProgress(null)
+  }
+  const chooseSample = (src: string) => {
+    stopImageUpload()
+    setUploadError('')
+    clearLocalPreview()
+    setImage(src)
+  }
+  const keepCurrentImage = () => {
+    stopImageUpload()
+    setUploadError('')
+    clearLocalPreview()
+  }
+  useEffect(() => () => {
+    uploadSeq.current += 1
+    uploadXhr.current?.abort()
+    if (localPreviewRef.current) URL.revokeObjectURL(localPreviewRef.current)
+  }, [])
+  const onPickImage = (file: File | undefined) => {
+    if (!file || saving) return
+    const kind = classifyProductImage(file)
+    if (typeof kind === 'string') {
+      stopImageUpload()
+      clearLocalPreview()
+      setUploadError(kind)
+      return
+    }
+    const seq = ++uploadSeq.current
+    uploadXhr.current?.abort()
+    clearLocalPreview()
+    const blobUrl = URL.createObjectURL(file)
+    localPreviewRef.current = blobUrl
+    setLocalPreview(blobUrl)
+    setUploadError('')
+    setUploadBusy(true)
+    setUploadProgress(0)
+    void (async () => {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      if (!supabaseUrl || !supabaseKey) {
+        if (seq !== uploadSeq.current) return
+        setUploadBusy(false)
+        setUploadProgress(null)
+        setUploadError('圖片上傳設定不完整，商品沒有改用這張圖')
+        return
+      }
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (seq !== uploadSeq.current) return
+      if (authError || !authData.user) {
+        setUploadBusy(false)
+        setUploadProgress(null)
+        setUploadError('請先登入後再上傳商品圖片。這張圖沒有存進商品。')
+        return
+      }
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (seq !== uploadSeq.current) return
+      if (!token) {
+        setUploadBusy(false)
+        setUploadProgress(null)
+        setUploadError('登入狀態已失效，請重新登入後再上傳。圖片沒有存進商品。')
+        return
+      }
+      const path = `${authData.user.id}/${crypto.randomUUID()}.${kind.ext}`
+      const xhr = new XMLHttpRequest()
+      uploadXhr.current = xhr
+      xhr.open('POST', `${supabaseUrl}/storage/v1/object/${PRODUCT_IMAGE_BUCKET}/${path}`)
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+      xhr.setRequestHeader('apikey', supabaseKey)
+      xhr.setRequestHeader('Content-Type', kind.type)
+      xhr.setRequestHeader('x-upsert', 'false')
+      xhr.setRequestHeader('cache-control', '3600')
+      xhr.upload.onprogress = (ev) => {
+        if (seq !== uploadSeq.current || !ev.lengthComputable || ev.total <= 0) return
+        setUploadProgress(Math.min(99, Math.round((ev.loaded / ev.total) * 100)))
+      }
+      xhr.onerror = () => {
+        if (seq !== uploadSeq.current) return
+        setUploadBusy(false)
+        setUploadProgress(null)
+        setUploadError('網路中斷，圖片沒有上傳，商品仍使用原本圖片')
+      }
+      xhr.onabort = () => {
+        if (uploadXhr.current === xhr) uploadXhr.current = null
+      }
+      xhr.onload = () => {
+        if (seq !== uploadSeq.current) return
+        uploadXhr.current = null
+        if (xhr.status < 200 || xhr.status >= 300) {
+          setUploadBusy(false)
+          setUploadProgress(null)
+          setUploadError(productImageUploadFailure(xhr.status, xhr.responseText || ''))
+          return
+        }
+        const publicUrl = supabase.storage.from(PRODUCT_IMAGE_BUCKET).getPublicUrl(path).data.publicUrl
+        if (!publicUrl) {
+          setUploadBusy(false)
+          setUploadProgress(null)
+          setUploadError('上傳完成但沒有取得圖片網址，商品沒有改用這張圖')
+          return
+        }
+        setImage(publicUrl)
+        clearLocalPreview()
+        setUploadError('')
+        setUploadProgress(100)
+        setUploadBusy(false)
+      }
+      xhr.send(file)
+    })()
+  }
   const bannedHits = scanBanned(name, desc, specs, options, variantName, useSecond ? options2 : '', useSecond ? variantName2 : '')
   const priceOver = Number(price) > MAX_PRICE
   const optList = parseOptions(options)
@@ -5125,7 +5083,8 @@ function ProductFormModal({
     if (bulkPrice !== '') setComboPriceIn((m) => ({ ...m, ...Object.fromEntries(comboRows.map((r) => [r.key, bulkPrice])) }))
   }
 
-  const submit = () => {
+  const submit = async () => {
+    if (saving) return
     const e: Record<string, string> = {}
     const priceN = Number(price)
     const stockN = Number(stock)
@@ -5145,9 +5104,13 @@ function ProductFormModal({
     }
     if (bannedHits.length) e.risk = '含違禁或敏感詞'
     if (!agreed) e.agreed = '請先勾選圖文相符切結書，才能上架商品'
+    if (uploadBusy) e.image = '圖片還在上傳，請等上傳完成後再儲存'
+    else if (uploadError) e.image = '圖片上傳失敗，商品沒有儲存'
+    else if (!image || image.startsWith('blob:')) e.image = '請選擇或上傳商品圖片'
     setErrors(e)
     if (Object.keys(e).length) {
-      if (e.risk || priceN > MAX_PRICE) alertRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (e.image) imageSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      else if (e.risk || priceN > MAX_PRICE) alertRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
     const specRows = specs
@@ -5178,9 +5141,12 @@ function ProductFormModal({
         ? opts.reduce((sum, o) => sum + optionStock[optKey(gName, o)], 0)
         : stockN
     const top = Math.max(priceN, ...Object.values(optionPrice), ...Object.values(comboPrice))
-    const approvedSame = !!product?.reviewApproved && topPrice(product) === top
-    const reviewHold = top > REVIEW_PRICE_LIMIT && !approvedSame
-    onSave({
+    const previousTop = product ? topPrice(product) : 0
+    const priceRaisedOverLimit = !!product && top > previousTop && top > REVIEW_PRICE_LIMIT
+    const reviewHold = product ? priceRaisedOverLimit || !!product.reviewHold : top > REVIEW_PRICE_LIMIT
+    setSaving(true)
+    try {
+      await onSave({
       id: product?.id ?? `p${Date.now()}`,
       sellerId,
       name: name.trim(),
@@ -5199,12 +5165,15 @@ function ProductFormModal({
       flagged: product?.flagged,
       flagReason: product?.flagReason,
       reviewHold,
-      reviewApproved: reviewHold ? false : product?.reviewApproved,
+      reviewApproved: priceRaisedOverLimit ? false : product?.reviewApproved,
       optionStock: Object.keys(optionStock).length ? optionStock : undefined,
       optionPrice: Object.keys(optionPrice).length ? optionPrice : undefined,
       comboStock: Object.keys(comboStock).length ? comboStock : undefined,
       comboPrice: Object.keys(comboPrice).length ? comboPrice : undefined,
     })
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -5213,7 +5182,7 @@ function ProductFormModal({
         className="grid gap-4 p-5 md:grid-cols-2"
         onSubmit={(e) => {
           e.preventDefault()
-          submit()
+          void submit()
         }}
       >
         <div className="md:col-span-2">
@@ -5244,13 +5213,19 @@ function ProductFormModal({
             )}
           </div>
         )}
-        {topPriceN > HIGH_PRICE_LIMIT && (
+        {(topPriceN > HIGH_PRICE_LIMIT || product?.reviewHold || (!!product?.reviewApproved && topPrice(product) > REVIEW_PRICE_LIMIT)) && (
           <div role="note" className="flex gap-2.5 rounded-2xl border border-blue-500/35 bg-blue-500/10 p-3 text-sm leading-relaxed text-blue-300 md:col-span-2">
             <ShieldCheck className="mt-0.5 size-5 shrink-0 text-blue-400" />
             <p className="text-pretty">
-              {topPriceN > REVIEW_PRICE_LIMIT
-                ? `最高價格超過 ${money(REVIEW_PRICE_LIMIT)}，送出後商品會先進入「審核中」，平台管理員核准後才會公開。`
-                : `最高價格超過 ${money(HIGH_PRICE_LIMIT)}，商品頁會自動顯示高單價防詐安全提示。`}
+              {product && priceReviewRejected(product)
+                ? '此商品已退回，尚未公開。修改內容後按儲存不會自動重新送審，請回到商品管理按「重新送審」。'
+                : product?.reviewHold
+                ? '此商品目前被審核鎖定。修改名稱、圖片、類別、描述、售價、規格或降價都不會自動解除，只改庫存也不會解除。管理員核准前不會公開。'
+                : product?.reviewApproved && topPrice(product) > REVIEW_PRICE_LIMIT
+                  ? `此高價商品已核准。若更改名稱、圖片、類別、描述、售價或規格，儲存後會重新送審；只改庫存不會。等於 ${money(REVIEW_PRICE_LIMIT)} 不因價格送審，降價也不會自動解除既有審核鎖定。`
+                  : topPriceN > REVIEW_PRICE_LIMIT
+                    ? `最高價格超過 ${money(REVIEW_PRICE_LIMIT)}，送出後商品會先進入「審核中」，平台管理員核准後才會公開。等於 ${money(REVIEW_PRICE_LIMIT)} 不因價格送審。`
+                    : `最高價格超過 ${money(HIGH_PRICE_LIMIT)}，商品頁會自動顯示高單價防詐安全提示。`}
             </p>
           </div>
         )}
@@ -5505,18 +5480,73 @@ function ProductFormModal({
             <textarea className={`${inputCls} min-h-24`} value={specs} onChange={(e) => setSpecs(e.target.value)} placeholder={'材質：陶瓷\n產地：台灣'} />
           </Field>
         </div>
-        <div className="md:col-span-2">
+        <div ref={imageSectionRef} className="md:col-span-2">
           <p className="mb-1.5 text-xs font-bold text-muted-foreground">商品圖片</p>
-          <div className="grid grid-cols-5 gap-2 sm:grid-cols-9" role="radiogroup" aria-label="商品圖片">
+          <div className="flex flex-wrap items-start gap-4">
+            <div className="w-28 shrink-0 overflow-hidden rounded-xl border border-border/70">
+              <ProductImage src={localPreview || image} alt="商品圖片預覽" />
+            </div>
+            <div className="min-w-0 flex-1 space-y-2">
+              <label className={`${btnGhost} cursor-pointer ${saving ? 'pointer-events-none opacity-50' : ''}`}>
+                <Upload className="size-4" />
+                從電腦／手機上傳商品圖片
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                  className="sr-only"
+                  disabled={saving}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    e.target.value = ''
+                    onPickImage(file)
+                  }}
+                />
+              </label>
+              <p className="text-xs leading-relaxed text-muted-foreground">JPG、PNG、WebP，單張上限 8 MB。上傳成功後才會改商品圖片，失敗不會儲存，也不會刪除原本的圖。</p>
+              {uploadBusy && (
+                <div className="space-y-1">
+                  <div
+                    className="h-2 overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={uploadProgress ?? 0}
+                    aria-label="商品圖片上傳進度"
+                  >
+                    <div className="h-full bg-primary transition-all" style={{ width: `${uploadProgress ?? 0}%` }} />
+                  </div>
+                  <p className="text-xs font-bold text-muted-foreground">上傳中 {uploadProgress ?? 0}%</p>
+                </div>
+              )}
+              {uploadError && (
+                <div role="alert" className="space-y-2">
+                  <p className="flex items-start gap-1 text-xs font-medium text-destructive">
+                    <CircleAlert className="mt-0.5 size-3.5 shrink-0" />{uploadError}
+                  </p>
+                  <button type="button" onClick={keepCurrentImage} className={`${btnGhost} px-3 py-1.5 text-xs`}>沿用目前圖片</button>
+                </div>
+              )}
+              {!uploadError && !uploadBusy && uploadProgress === 100 && (
+                <p className="text-xs font-bold text-emerald-400">圖片已上傳，儲存商品後才會寫入這個網址</p>
+              )}
+              {errors.image && !uploadError && (
+                <p role="alert" className="flex items-center gap-1 text-xs font-medium text-destructive">
+                  <CircleAlert className="size-3.5" />{errors.image}
+                </p>
+              )}
+            </div>
+          </div>
+          <p className="mb-1.5 mt-4 text-xs font-bold text-muted-foreground">或選擇系統範例圖</p>
+          <div className="grid grid-cols-5 gap-2 sm:grid-cols-9" role="radiogroup" aria-label="系統範例圖">
             {IMAGE_OPTIONS.map((img) => (
               <button
                 key={img.id}
                 type="button"
                 role="radio"
-                aria-checked={image === img.src}
+                aria-checked={image === img.src && !localPreview}
                 aria-label={img.label}
-                onClick={() => setImage(img.src)}
-                className={`overflow-hidden rounded-xl border-2 transition ${image === img.src ? 'border-primary' : 'border-transparent opacity-70 hover:opacity-100'}`}
+                onClick={() => chooseSample(img.src)}
+                className={`overflow-hidden rounded-xl border-2 transition ${image === img.src && !localPreview ? 'border-primary' : 'border-transparent opacity-70 hover:opacity-100'}`}
               >
                 <ProductImage src={img.src} alt="" />
               </button>
@@ -5543,8 +5573,8 @@ function ProductFormModal({
           )}
         </div>
         <div className="flex justify-end gap-2 md:col-span-2">
-          <button type="button" className={btnGhost} onClick={onClose}>取消</button>
-          <button type="submit" className={btnPrimary}>{product && !product.draft ? '儲存變更' : '儲存並預覽'}</button>
+          <button type="button" className={btnGhost} onClick={onClose} disabled={saving}>取消</button>
+          <button type="submit" className={btnPrimary} disabled={saving || uploadBusy}>{saving ? '寫入中…' : uploadBusy ? '圖片上傳中…' : product && !product.draft ? '儲存變更' : '儲存並預覽'}</button>
         </div>
       </form>
     </Modal>
@@ -5698,6 +5728,7 @@ const planLabel: Record<PlanStatus, { text: string; tone: Tone }> = {
   overdue: { text: '逾期未繳費（已關店）', tone: 'bad' },
   grace: { text: '扣款失敗・補繳緩衝期', tone: 'warn' },
   suspended: { text: '暫停營業 (suspended)', tone: 'bad' },
+  unbilled: { text: '月費功能建置中', tone: 'neutral' },
 }
 
 function ShopStatusSwitch({ closed, onChange }: { closed: boolean; onChange: (closed: boolean) => void }) {
@@ -6013,14 +6044,11 @@ function SmsReminderCard({ seller, onSaveKyc }: { seller: Seller; onSaveKyc: (k:
   const [binding, setBinding] = useState(false)
   const [enabled, setEnabled] = useState(true)
   const [previewDays, setPreviewDays] = useState<(typeof SMS_REMIND_DAYS)[number]>(3)
-  const phone = seller.kyc?.phone ?? DEMO_SELLER_MOBILES[seller.id] ?? ''
+  const phone = ''
   const hasPhone = phone.length === 10
   const masked = hasPhone ? `${phone.slice(0, 4)}***${phone.slice(7)}` : '尚未綁定手機'
   const active = enabled && hasPhone
-  const bindPhone = (p: string) => {
-    const base: KycInfo = seller.kyc ?? { kind: 'individual', idVerified: false, phone: '', phoneVerified: false, bankVerified: false }
-    onSaveKyc({ ...base, phone: p, phoneVerified: true })
-    setEnabled(true)
+  const bindPhone = (_p: string) => {
     setBinding(false)
   }
   const today = todayStr()
@@ -6040,18 +6068,11 @@ function SmsReminderCard({ seller, onSaveKyc }: { seller: Seller; onSaveKyc: (k:
             <Smartphone className="size-4 text-brand-ink" />簡訊自動提醒通知
           </h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            系統會在{expireLabel}前 7 天與 3 天，自動發送提醒簡訊至賣家手機 {masked}
+            簡訊提醒尚未串接，不會發送驗證碼或到期通知，也不會把手機標成已驗證。
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Pill tone={active ? 'ok' : 'neutral'}>{active ? '提醒已開啟' : hasPhone ? '提醒已關閉' : '尚未綁定手機'}</Pill>
-          <button
-            type="button"
-            onClick={() => setBinding(true)}
-            className={hasPhone ? `${btnGhost} px-3 py-1.5 text-xs` : `${btnPrimary} px-4 py-1.5 text-xs`}
-          >
-            <Smartphone className="size-3.5" />{hasPhone ? '更換手機' : '綁定手機'}
-          </button>
+          <Pill tone="neutral">簡訊尚未啟用</Pill>
           <button
             type="button"
             role="switch"
@@ -6078,14 +6099,12 @@ function SmsReminderCard({ seller, onSaveKyc }: { seller: Seller; onSaveKyc: (k:
                   <p className="font-bold">到期前 {s.days} 天提醒</p>
                   <p className="text-xs text-muted-foreground">發送日 {fmtDate(s.date)}・上午 10:00</p>
                 </div>
-                <Pill tone={!active ? 'neutral' : s.sent ? 'ok' : 'warn'}>
-                  {!active ? '已暫停' : s.sent ? <><Check className="size-3" />已發送</> : <><Clock className="size-3" />已排程</>}
-                </Pill>
+                <Pill tone="neutral">尚未啟用</Pill>
               </li>
             ))}
           </ul>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            即使已啟用自動扣款，系統仍會發送提醒；續費完成後，下一期提醒會自動重新排程。
+            下面的日期只是方案到期的參考，不代表簡訊已經排程或寄出。
           </p>
         </div>
 
@@ -6114,7 +6133,6 @@ function SmsReminderCard({ seller, onSaveKyc }: { seller: Seller; onSaveKyc: (k:
           </div>
         </div>
       </div>
-      {binding && <PhoneBindModal currentPhone={hasPhone ? phone : ''} onClose={() => setBinding(false)} onBound={bindPhone} />}
     </div>
   )
 }
@@ -6324,12 +6342,10 @@ function SellerPaymentSettings({ seller, onSave }: { seller: Seller; onSave: (p:
   )
 }
 
-function SellerKycPanel({ seller, onSave }: { seller: Seller; onSave: (k: KycInfo) => void }) {
-  const cur: KycInfo = seller.kyc ?? { kind: 'individual', idVerified: false, phone: '', phoneVerified: false, bankVerified: false }
-  const [phone, setPhone] = useState(cur.phone)
-  const [error, setError] = useState('')
-  const done = cur.idVerified && cur.phoneVerified && cur.bankVerified
-  const step = (ok: boolean, title: string, desc: string, action: ReactNode) => (
+function SellerKycPanel({ seller }: { seller: Seller }) {
+  const identityOk = seller.verify === 'approved'
+  const identityLabel = seller.verify === 'approved' ? '平台已審核通過' : seller.verify === 'rejected' ? '平台已退回' : '等待平台人工審核'
+  const step = (ok: boolean, title: string, desc: string, status: string) => (
     <li className="flex flex-wrap items-center gap-3 rounded-2xl border border-border/70 p-3">
       <span className={`flex size-8 shrink-0 items-center justify-center rounded-full ${ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
         {ok ? <Check className="size-4" /> : <ShieldAlert className="size-4" />}
@@ -6338,81 +6354,36 @@ function SellerKycPanel({ seller, onSave }: { seller: Seller; onSave: (k: KycInf
         <p className="text-sm font-bold">{title}</p>
         <p className="text-xs text-muted-foreground">{desc}</p>
       </div>
-      {ok ? <Pill tone="ok">已完成</Pill> : action}
+      <Pill tone={ok ? 'ok' : 'neutral'}>{status}</Pill>
     </li>
   )
   return (
     <section className={`${panelCls} space-y-4 p-5`} aria-label="實名認證">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="flex items-center gap-1.5 text-base font-black"><ShieldAlert className="size-4 text-brand-ink" />賣家實名認證（KYC）</h2>
-        <Pill tone={done ? 'ok' : 'warn'}>{done ? '認證完成' : '尚未完成'}</Pill>
+        <Pill tone={identityOk ? 'ok' : 'warn'}>{identityLabel}</Pill>
       </div>
-      <div role="radiogroup" aria-label="賣家身分" className="flex gap-2">
-        {([['individual', '個人賣家'], ['company', '公司行號']] as const).map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            role="radio"
-            aria-checked={cur.kind === k}
-            onClick={() => onSave({ ...cur, kind: k, phone })}
-            className={`rounded-full border px-4 py-1.5 text-xs font-bold transition ${cur.kind === k ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:bg-muted'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">個人賣家與公司行號都依已送出的證件，由平台管理員審核。這裡不能自行完成驗證。</p>
       <ul className="space-y-2.5">
         {step(
-          cur.idVerified,
-          cur.kind === 'company' ? '公司登記與負責人驗證' : '身分證件驗證',
-          `${seller.owner}・${seller.idNo}（審核文件：${seller.docName || '未上傳'}）`,
-          <button type="button" onClick={() => onSave({ ...cur, phone, idVerified: true })} className={`${btnGhost} px-3 py-1.5 text-xs`}>模擬完成驗證</button>,
+          identityOk,
+          '身分證件／公司登記',
+          `${seller.owner || '負責人'}・審核文件：${seller.docName || seller.kycDocumentPath || '已於申請時上傳'}`,
+          identityLabel,
         )}
-        {step(
-          cur.phoneVerified,
-          '手機號碼驗證',
-          cur.phoneVerified ? cur.phone : '輸入手機號碼以簡訊驗證碼確認（模擬）',
-          <div className="flex items-center gap-1.5">
-            <input aria-label="賣家手機號碼" className={`${inputCls} w-36`} placeholder="09xxxxxxxx" value={phone} onChange={(ev) => { setPhone(ev.target.value); setError('') }} />
-            <button
-              type="button"
-              onClick={() => {
-                if (!/^09\d{8}$/.test(phone)) return setError('請輸入 10 碼手機號碼（09 開頭）')
-                onSave({ ...cur, phone, phoneVerified: true })
-              }}
-              className={`${btnGhost} px-3 py-1.5 text-xs`}
-            >
-              驗證
-            </button>
-          </div>,
-        )}
-        {step(
-          cur.bankVerified,
-          '銀行帳戶 1 元驗證',
-          seller.payment ? `將向 ${seller.payment.bankCode}-${seller.payment.bankAccount} 匯入 1 元並比對戶名（模擬）` : '請先於上方儲存收款帳號，才能進行 1 元驗證',
-          <button
-            type="button"
-            disabled={!seller.payment}
-            onClick={() => onSave({ ...cur, phone, bankVerified: true })}
-            className={`${btnGhost} px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50`}
-          >
-            發送 1 元驗證
-          </button>,
-        )}
+        {step(false, '手機號碼驗證', '簡訊驗證尚未串接，輸入號碼也不會變成已驗證。', '尚未啟用')}
+        {step(false, '銀行帳戶 1 元驗證', '銀行匯入 1 元核對尚未串接，不能把帳戶標成已驗證。', '尚未啟用')}
       </ul>
-      {error && <p className="text-xs font-bold text-destructive" role="alert">{error}</p>}
     </section>
   )
 }
 
 function SellerExportPanel({
   products,
-  orders,
   logs,
   onExported,
 }: {
   products: Product[]
-  orders: Order[]
   logs: ExportLog[]
   onExported: (kind: ExportLog['kind'], rows: number) => void
 }) {
@@ -6423,20 +6394,13 @@ function SellerExportPanel({
     ])
     onExported('products', products.length)
   }
-  const exportOrders = () => {
-    downloadCsv('orders.csv', [
-      ['訂單編號', '日期', '買家', '品項', '運費', '總額', '付款', '出貨狀態'],
-      ...orders.map((o) => [o.id, o.date, o.buyer, o.items.map((i) => `${i.name}x${i.qty}`).join(' / '), o.shipping, o.total, `${o.pay === 'card' ? '信用卡' : 'ATM'}・${o.payStatus}`, o.status]),
-    ])
-    onExported('orders', orders.length)
-  }
   return (
     <section className={`${panelCls} space-y-3 p-5`} aria-label="資料匯出">
       <h2 className="flex items-center gap-1.5 text-base font-black"><FileText className="size-4 text-brand-ink" />資料匯出（CSV）</h2>
-      <p className="text-xs text-muted-foreground">匯出內容僅包含您自己的店鋪資料，每次匯出都會留下紀錄。</p>
+      <p className="text-xs text-muted-foreground">匯出內容僅包含您自己的店鋪資料，每次匯出都會留下紀錄。正式訂單匯出尚未開放，不會把展示用訂單存成訂單明細。</p>
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={exportProducts} className={btnGhost}>匯出商品清單（{products.length}）</button>
-        <button type="button" onClick={exportOrders} className={btnGhost}>匯出訂單明細（{orders.length}）</button>
+        <button type="button" disabled title="正式訂單匯出尚未開放" className={btnGhost}>匯出訂單明細（尚未開放）</button>
       </div>
       {logs.length > 0 && (
         <ul className="divide-y divide-border/60 rounded-2xl border border-border/70 text-xs">
@@ -6453,23 +6417,32 @@ function SellerExportPanel({
 }
 
 const MIGRATE_MAX_ROWS = 200
-const MIGRATE_COLUMNS: Record<'name' | 'desc' | 'category' | 'variantName' | 'option' | 'price' | 'stock', string[]> = {
+const MIGRATE_MAX_PRODUCTS = 100
+const MIGRATE_FORMAT_NOTE = '目前只支援「單一標題列」的 CSV：商品名稱、價格為必填。可選商品描述、商品分類、規格名稱、規格選項、第二層規格、庫存、商品編號、圖片網址。這不是蝦皮 API，也不會自動同步；不保證所有蝦皮賣家中心版本都符合此欄位。'
+const MIGRATE_COLUMNS = {
   name: ['商品名稱', '商品名', 'product name', 'name'],
   desc: ['商品描述', '描述', 'product description', 'description'],
   category: ['商品分類', '分類', '類別', 'category'],
-  variantName: ['規格名稱', '規格', 'variation name'],
-  option: ['規格選項', '選項', '商品選項', 'variation'],
+  variantName: ['規格名稱', '規格名稱1', '規格1名稱', '規格', 'variation name'],
+  option: ['規格選項', '規格選項1', '規格1選項', '商品選項', '規格1', '選項', 'variation'],
+  variantName2: ['規格名稱2', '規格2名稱'],
+  option2: ['規格選項2', '規格2選項', '規格2'],
   price: ['價格', '售價', '商品價格', 'price'],
   stock: ['庫存', '商品數量', '數量', 'stock'],
-}
+  sourceId: ['商品編號', '商品id', '主商品貨號', 'product id', 'item id'],
+  image: ['圖片網址', '圖片', '圖片1', '商品圖片', '主圖', '圖片連結', 'image', 'image url'],
+} as const
+type MigrateColumn = keyof typeof MIGRATE_COLUMNS
 const MIGRATE_SAMPLE_CSV = [
-  '商品名稱,商品描述,商品分類,規格名稱,規格選項,價格,庫存',
-  '手拉坯陶瓷馬克杯,每一只都是手工拉坯，容量約 350ml，適合日常早餐與下午茶。,居家生活,顏色,霧白,420,30',
-  '手拉坯陶瓷馬克杯,每一只都是手工拉坯，容量約 350ml，適合日常早餐與下午茶。,居家生活,顏色,墨藍,450,18',
-  '輕量折疊收納袋,防潑水尼龍材質，折疊後僅手掌大小，旅行出差都方便。,鞋包配飾,尺寸,M,290,60',
-  '無線藍牙耳機,支援藍牙 5.3，單次續航約 6 小時。,3C數位,顏色,黑色,1280,45',
-  '電子煙煙彈,範例：含違禁詞的商品會被擋下,3C數位,規格,標準款,500,10',
-  '高價收藏品,範例：超過價格上限的商品會被擋下,居家生活,規格,標準款,250000,1',
+  '商品編號,商品名稱,商品描述,商品分類,規格名稱,規格選項,價格,庫存,圖片網址',
+  'SP-MUG,手拉坯陶瓷馬克杯,每一只都是手工拉坯，容量約 350ml。,居家生活,顏色,霧白,420,30,https://example.com/mug-white.jpg',
+  'SP-MUG,手拉坯陶瓷馬克杯,每一只都是手工拉坯，容量約 350ml。,居家生活,顏色,墨藍,450,18,',
+  'SP-BAG,輕量折疊收納袋,防潑水尼龍材質，折疊後僅手掌大小。,鞋包配飾,尺寸,M,290,60,',
+  'SP-EAR,無線藍牙耳機,支援藍牙 5.3，單次續航約 6 小時。,3C數位,顏色,黑色,1280,45,not-a-url',
+  'SP-BAN,電子煙煙彈,範例：含違禁詞的商品會被擋下,3C數位,規格,標準款,500,10,',
+  'SP-HIGH,高價收藏品,範例：超過 50000 會送審，不會直接公開,居家生活,規格,標準款,60000,1,',
+  'SP-OVER,超過上限範例,範例：超過平台價格上限不會匯入,居家生活,規格,標準款,250000,1,',
+  'SP-BAD,庫存錯誤範例,範例：負數庫存不會匯入,居家生活,規格,標準款,100,-3,',
 ].join('\n')
 
 function parseCsv(text: string): string[][] {
@@ -6504,16 +6477,33 @@ function parseCsv(text: string): string[][] {
   return rows
 }
 
+interface MigrateOption {
+  label: string
+  price: number
+  stock: number
+}
+
 interface MigrateItem {
   line: number
   name: string
   optionCount: number
+  variantLabel: string
   price: number
+  maxPrice: number
   stock: number
   category: string
+  imageSource: string
+  imageNote: string
+  sourceId: string
+  duplicate: boolean
   reasons: string[]
   notes: string[]
   product?: Product
+}
+
+type ProductImportResult = {
+  saved: { id: string; name: string; reviewHold: boolean }[]
+  failed: { name: string; message: string }[]
 }
 
 function matchCsvCategory(raw: string): string | null {
@@ -6523,24 +6513,78 @@ function matchCsvCategory(raw: string): string | null {
   return CATEGORIES.find((c) => flat(c) === n) ?? CATEGORIES.find((c) => n.includes(flat(c)) || flat(c).includes(n)) ?? null
 }
 
+function normProductName(name: string) {
+  return name.trim().replace(/\s+/g, ' ')
+}
+
+function parseMigratePrice(raw: string): number | null {
+  const t = raw.trim().replace(/[NT$\s,元]/gi, '')
+  if (!t || !/^\d+(\.\d{1,2})?$/.test(t)) return null
+  const n = Number(t)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.round(n * 100) / 100
+}
+
+function parseMigrateStock(raw: string): number | null {
+  const t = raw.trim().replace(/,/g, '')
+  if (!t) return 0
+  if (!/^\d+$/.test(t)) return null
+  const n = Number(t)
+  if (!Number.isInteger(n) || n < 0 || n > 1_000_000) return null
+  return n
+}
+
+function inspectMigrateImage(raw: string): { url: string; source: string; note: string } {
+  const first = raw.split(/[|\n;]/).map((part) => part.trim()).find(Boolean) ?? ''
+  if (!first) return { url: '', source: '', note: '沒有圖片，不會搬移圖片，也尚未上傳到平台 Storage' }
+  let parsed: URL
+  try {
+    parsed = new URL(first)
+  } catch {
+    return { url: '', source: first, note: '圖片不是 http(s) 網址，未寫入。蝦皮圖片不能保證可直接存取' }
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { url: '', source: first, note: '圖片來源協定無效，未寫入' }
+  }
+  return {
+    url: parsed.toString(),
+    source: parsed.toString(),
+    note: '只記錄圖片網址，尚未上傳到平台 Storage，不保證此連結可顯示',
+  }
+}
+
+function variantTextError(label: string, kind: string) {
+  if (label.length > 40) return `${kind}超過 40 字`
+  if (label.includes('|') || label.includes('::')) return `${kind}不可包含 | 或 ::`
+  return ''
+}
+
 function buildMigration(text: string, sellerId: string, existingNames: Set<string>) {
   const rows = parseCsv(text)
-  if (rows.length < 2) return { error: '檔案沒有資料列，請確認是蝦皮匯出的商品 CSV。', items: [] as MigrateItem[], truncated: false }
+  const empty = { error: '', items: [] as MigrateItem[], truncated: false, ignoredSellerColumn: false }
+  if (rows.length < 2) return { ...empty, error: '檔案沒有資料列。請使用含標題列的 CSV，或下載平台範本。' }
   const header = rows[0].map((h) => h.trim().toLowerCase())
-  const col = (key: keyof typeof MIGRATE_COLUMNS) => header.findIndex((h) => MIGRATE_COLUMNS[key].some((a) => a.toLowerCase() === h))
+  const col = (key: MigrateColumn) => header.findIndex((h) => MIGRATE_COLUMNS[key].some((alias) => alias.toLowerCase() === h))
   const idx = {
     name: col('name'),
     desc: col('desc'),
     category: col('category'),
     variantName: col('variantName'),
     option: col('option'),
+    variantName2: col('variantName2'),
+    option2: col('option2'),
     price: col('price'),
     stock: col('stock'),
+    sourceId: col('sourceId'),
+    image: col('image'),
   }
   if (idx.name < 0 || idx.price < 0) {
-    return { error: '找不到「商品名稱」或「價格」欄位，請確認第一列是標題列。', items: [] as MigrateItem[], truncated: false }
+    return { ...empty, error: '找不到「商品名稱」或「價格」欄位。第一列必須是標題列，且欄位名稱要與平台範本一致。' }
   }
+  const ignoredSellerColumn = header.some((h) => ['seller_id', 'seller id', '賣家編號', '賣家id', '店家編號'].includes(h))
   const get = (r: string[], i: number) => (i >= 0 ? (r[i] ?? '').trim() : '')
+  const dataRows = rows.slice(1)
+  const truncated = dataRows.length > MIGRATE_MAX_ROWS
 
   interface Group {
     name: string
@@ -6548,56 +6592,88 @@ function buildMigration(text: string, sellerId: string, existingNames: Set<strin
     desc: string
     category: string
     variantName: string
-    options: string[]
-    prices: number[]
-    stock: number
-    badPrice: boolean
-    badStock: boolean
+    options: MigrateOption[]
+    sourceIds: string[]
+    imageRaw: string
+    rowErrors: string[]
   }
   const groups = new Map<string, Group>()
-  rows.slice(1, MIGRATE_MAX_ROWS + 1).forEach((r, i) => {
+  dataRows.slice(0, MIGRATE_MAX_ROWS).forEach((r, i) => {
     const line = i + 2
-    const name = get(r, idx.name)
+    const name = normProductName(get(r, idx.name))
     const key = name || `__empty${line}`
     let g = groups.get(key)
     if (!g) {
-      g = { name, line, desc: '', category: '', variantName: '', options: [], prices: [], stock: 0, badPrice: false, badStock: false }
+      g = { name, line, desc: '', category: '', variantName: '', options: [], sourceIds: [], imageRaw: '', rowErrors: [] }
       groups.set(key, g)
     }
     g.desc ||= get(r, idx.desc)
     g.category ||= get(r, idx.category)
-    g.variantName ||= get(r, idx.variantName)
-    const option = get(r, idx.option)
-    if (option && !g.options.includes(option)) g.options.push(option)
-    const priceRaw = get(r, idx.price).replace(/[^0-9.]/g, '')
-    const price = priceRaw ? Number(priceRaw) : NaN
-    if (Number.isFinite(price) && price > 0) g.prices.push(price)
-    else g.badPrice = true
-    const stockRaw = get(r, idx.stock).replace(/[^0-9.-]/g, '')
-    const stock = stockRaw ? Number(stockRaw) : 0
-    if (Number.isFinite(stock) && stock >= 0) g.stock += Math.floor(stock)
-    else g.badStock = true
+    g.variantName ||= get(r, idx.variantName) || get(r, idx.variantName2)
+    g.imageRaw ||= get(r, idx.image)
+    const sourceId = get(r, idx.sourceId)
+    if (sourceId && !g.sourceIds.includes(sourceId)) g.sourceIds.push(sourceId)
+    const option1 = get(r, idx.option)
+    const option2 = get(r, idx.option2)
+    const option = [option1, option2].filter(Boolean).join(' / ')
+    const price = parseMigratePrice(get(r, idx.price))
+    const stock = parseMigrateStock(idx.stock >= 0 ? get(r, idx.stock) : '')
+    if (price == null) g.rowErrors.push(`第 ${line} 列價格必須是 0 以上的數字`)
+    if (stock == null) g.rowErrors.push(`第 ${line} 列庫存必須是 0 以上的整數`)
+    if (option) {
+      const nameError = variantTextError(g.variantName || '規格', '規格名稱')
+      const optionError = variantTextError(option, '規格選項')
+      if (nameError) g.rowErrors.push(nameError)
+      if (optionError) g.rowErrors.push(optionError)
+      const prev = g.options.find((item) => item.label === option)
+      if (prev) g.rowErrors.push(`規格「${option}」重複`)
+      else if (price != null && stock != null) g.options.push({ label: option, price, stock })
+    } else if (price != null && stock != null) {
+      const prev = g.options.find((item) => item.label === '標準款')
+      if (prev && prev.price !== price) g.rowErrors.push('同一商品多列價格不一致，且沒有規格選項')
+      else if (!prev) g.options.push({ label: '標準款', price, stock })
+      else prev.stock += stock
+    }
   })
 
+  const knownNames = new Set(Array.from(existingNames).map((name) => normProductName(name)))
   const stamp = Date.now()
   const items: MigrateItem[] = Array.from(groups.values()).map((g, n) => {
-    const reasons: string[] = []
+    const reasons = Array.from(new Set(g.rowErrors))
     const notes: string[] = []
-    const price = g.prices.length ? Math.round(Math.min(...g.prices)) : 0
+    const prices = g.options.map((option) => option.price)
+    const price = prices.length ? Math.min(...prices) : 0
+    const maxPrice = prices.length ? Math.max(...prices) : 0
+    const stock = g.options.reduce((sum, option) => sum + option.stock, 0)
+    const image = inspectMigrateImage(g.imageRaw)
     if (!g.name) reasons.push('缺少商品名稱')
-    if (!g.prices.length) reasons.push('價格格式錯誤')
-    else if (price > MAX_PRICE) reasons.push(`超過價格上限 NT$${MAX_PRICE.toLocaleString('en-US')}`)
-    if (g.badStock) reasons.push('庫存格式錯誤')
-    const hits = scanBanned(g.name, g.desc, ...g.options)
+    if (g.name.length > 120) reasons.push('商品名稱超過 120 字')
+    if (!g.options.length && !reasons.length) reasons.push('沒有可用的價格或庫存')
+    if (g.options.length > 30) reasons.push('同一商品最多 30 個規格選項')
+    if (prices.length && maxPrice > MAX_PRICE) reasons.push(`超過價格上限 NT$${MAX_PRICE.toLocaleString('en-US')}`)
+    else if (prices.length && maxPrice > REVIEW_PRICE_LIMIT) notes.push(`最高售價超過 ${money(REVIEW_PRICE_LIMIT)}，寫入後由資料庫送審，核准前不會公開`)
+    const hits = scanBanned(g.name, g.desc, ...g.options.map((option) => option.label))
     if (hits.length) reasons.push(`含違禁詞：${hits.join('、')}`)
-    if (g.name && existingNames.has(g.name)) reasons.push('賣場已有同名商品')
-
+    if (g.sourceIds.length > 1) notes.push('同一商品名稱有多個商品編號，已合併規格，不會覆蓋既有商品')
+    else if (!g.sourceIds.length) notes.push('沒有原始商品編號，重複判斷只依商品名稱，不會覆蓋既有商品')
     const matched = matchCsvCategory(g.category)
     const category = matched ?? DEFAULT_MAIN
     if (!matched) notes.push(g.category ? `分類「${g.category}」不在平台分類，已改為${DEFAULT_MAIN}` : `未填分類，已設為${DEFAULT_MAIN}`)
-    if (g.badPrice && g.prices.length) notes.push('部分規格價格無效，已採用最低有效價格')
-
-    const options = g.options.length ? g.options : ['標準款']
+    notes.push(image.note)
+    const duplicate = !!g.name && knownNames.has(g.name)
+    if (duplicate) notes.push('賣場已有同名商品。預設略過；若確認另新增，只會新增一筆，不會修改既有商品')
+    const overCap = n >= MIGRATE_MAX_PRODUCTS
+    if (overCap) reasons.push(`超過單次 ${MIGRATE_MAX_PRODUCTS} 件上限`)
+    const variantName = g.variantName || '規格'
+    const variantLabel = g.options.map((option) => option.label).join('、') || '標準款'
+    const optionPrice: Record<string, number> = {}
+    const optionStock: Record<string, number> = {}
+    if (g.options.some((option) => option.label !== '標準款' || option.price !== price)) {
+      g.options.forEach((option) => {
+        optionPrice[optKey(variantName, option.label)] = option.price
+        optionStock[optKey(variantName, option.label)] = option.stock
+      })
+    }
     const product: Product | undefined = reasons.length
       ? undefined
       : {
@@ -6607,18 +6683,37 @@ function buildMigration(text: string, sellerId: string, existingNames: Set<strin
           category,
           subCategory: subsOfMain(category)[0],
           price,
-          image: IMAGE_OPTIONS[n % IMAGE_OPTIONS.length].src,
-          variants: [{ name: g.variantName || '規格', options }],
-          stock: g.stock,
+          image: image.url,
+          variants: [{ name: variantName, options: g.options.map((option) => option.label) }],
+          stock,
           sold: 0,
           specs: [['品名', g.name]],
           desc: g.desc || '賣家尚未填寫商品描述。',
           reviews: [],
           active: true,
+          draft: false,
+          optionPrice: Object.keys(optionPrice).length ? optionPrice : undefined,
+          optionStock: Object.keys(optionStock).length ? optionStock : undefined,
         }
-    return { line: g.line, name: g.name, optionCount: options.length, price, stock: g.stock, category, reasons, notes, product }
+    return {
+      line: g.line,
+      name: g.name,
+      optionCount: g.options.length || 1,
+      variantLabel,
+      price,
+      maxPrice,
+      stock,
+      category,
+      imageSource: image.source,
+      imageNote: image.note,
+      sourceId: g.sourceIds[0] ?? '',
+      duplicate,
+      reasons,
+      notes,
+      product,
+    }
   })
-  return { error: '', items, truncated: rows.length - 1 > MIGRATE_MAX_ROWS }
+  return { error: '', items, truncated, ignoredSellerColumn }
 }
 
 function downloadSampleCsv() {
@@ -6639,19 +6734,23 @@ function ProductMigrateModal({
 }: {
   sellerId: string
   existingNames: Set<string>
-  onImport: (products: Product[]) => void
+  onImport: (products: Product[]) => Promise<ProductImportResult>
   onClose: () => void
 }) {
   const [fileName, setFileName] = useState('')
   const [csvText, setCsvText] = useState('')
   const [agreed, setAgreed] = useState(false)
+  const [allowDuplicates, setAllowDuplicates] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [readError, setReadError] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<ProductImportResult | null>(null)
 
   const result = csvText ? buildMigration(csvText, sellerId, existingNames) : null
-  const okItems = result?.items.filter((i) => i.product) ?? []
-  const badCount = (result?.items.length ?? 0) - okItems.length
-  const canImport = okItems.length > 0 && agreed
+  const readyItems = result?.items.filter((item) => item.product && (!item.duplicate || allowDuplicates)) ?? []
+  const blockedCount = result?.items.filter((item) => !item.product).length ?? 0
+  const duplicateCount = result?.items.filter((item) => item.duplicate && item.product).length ?? 0
+  const canImport = readyItems.length > 0 && agreed && !importResult
 
   const loadFile = async (file: File | undefined) => {
     if (!file) return
@@ -6666,18 +6765,29 @@ function ProductMigrateModal({
     }
     const buf = await file.arrayBuffer()
     let text = new TextDecoder('utf-8').decode(buf)
-    if (text.includes('\uFFFD')) text = new TextDecoder('big5').decode(buf)
+    if (text.includes('\uFFFD')) {
+      try {
+        text = new TextDecoder('big5').decode(buf)
+      } catch {
+        text = new TextDecoder('utf-8').decode(buf)
+      }
+    }
     setFileName(file.name)
     setCsvText(text)
     setAgreed(false)
+    setAllowDuplicates(false)
+    setImportResult(null)
   }
 
   return (
     <Modal title="一鍵商品搬家（蝦皮 CSV 匯入）" onClose={onClose} size="lg" z={60}>
       <div className="space-y-4 p-5">
         <LegalBanner />
+        <p className="rounded-xl border border-amber-500/35 bg-amber-500/10 p-3 text-pretty text-xs leading-relaxed text-amber-200">
+          {MIGRATE_FORMAT_NOTE} CSV 裡的賣家編號一律忽略，商品只會歸到目前登入且已核准的賣家。
+        </p>
         <ol className="grid gap-2 sm:grid-cols-3">
-          {['下載範例，或從蝦皮賣家中心匯出商品 CSV', '上傳檔案，系統自動比對欄位並檢查違禁詞與價格', '確認預覽後一鍵匯入，匯入後仍可逐項編輯'].map((t, i) => (
+          {['下載範本，或上傳欄位相符的 CSV', '預覽名稱、價格、庫存、分類、規格與圖片來源', '確認後才寫入；失敗筆數會單獨列出'].map((t, i) => (
             <li key={t} className="flex gap-2 rounded-2xl border border-border/70 bg-secondary/60 p-3">
               <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-black text-primary-foreground">{i + 1}</span>
               <span className="text-pretty text-xs leading-relaxed">{t}</span>
@@ -6714,6 +6824,8 @@ function ProductMigrateModal({
               setFileName('shopee-products-sample.csv（範例資料）')
               setCsvText(MIGRATE_SAMPLE_CSV)
               setAgreed(false)
+              setAllowDuplicates(false)
+              setImportResult(null)
               setReadError('')
             }}
             className={btnGhost}
@@ -6727,6 +6839,8 @@ function ProductMigrateModal({
                 setFileName('')
                 setCsvText('')
                 setAgreed(false)
+                setAllowDuplicates(false)
+                setImportResult(null)
               }}
               className={btnGhost}
             >
@@ -6747,25 +6861,32 @@ function ProductMigrateModal({
           </p>
         )}
 
+        {result?.ignoredSellerColumn && (
+          <p className="text-xs font-bold text-amber-300">檔案含賣家編號欄，已忽略。不能用 CSV 指定 seller_id。</p>
+        )}
+
         {result && !result.error && (
           <section aria-label="匯入預覽" className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-black">匯入預覽</h3>
-              <Pill tone="ok">可匯入 {okItems.length} 件</Pill>
-              {badCount > 0 && <Pill tone="bad">無法匯入 {badCount} 件</Pill>}
-              {result.truncated && <Pill tone="warn">僅讀取前 {MIGRATE_MAX_ROWS} 列</Pill>}
+              <Pill tone="ok">這次寫入 {readyItems.length} 件</Pill>
+              {blockedCount > 0 && <Pill tone="bad">無法匯入 {blockedCount} 件</Pill>}
+              {duplicateCount > 0 && <Pill tone="warn">同名 {duplicateCount} 件</Pill>}
+              {result.truncated && <Pill tone="warn">只讀前 {MIGRATE_MAX_ROWS} 列</Pill>}
             </div>
             <ul className="max-h-72 space-y-2 overflow-y-auto pr-1">
-              {result.items.map((it) => (
+              {result.items.map((it) => {
+                const willWrite = !!it.product && (!it.duplicate || allowDuplicates)
+                return (
                 <li key={`${it.line}-${it.name}`} className={`flex gap-3 rounded-xl border p-3 ${it.product ? 'border-border/70' : 'border-destructive/40 bg-red-500/10'}`}>
-                  {it.product ? <Check className="mt-0.5 size-4 shrink-0 text-emerald-400" /> : <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />}
+                  {willWrite ? <Check className="mt-0.5 size-4 shrink-0 text-emerald-400" /> : <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />}
                   <div className="min-w-0 flex-1 text-sm">
                     <p className="truncate font-bold">{it.name || `（第 ${it.line} 列未填名稱）`}</p>
-                    {it.product && (
-                      <p className="text-xs text-muted-foreground">
-                        {it.category}・{money(it.price)}・庫存 {it.stock}・{it.optionCount} 個規格選項
-                      </p>
-                    )}
+                    <p className="text-xs text-muted-foreground">
+                      {it.category || '未分類'}・售價 {money(it.price)}{it.maxPrice !== it.price ? `・最高規格 ${money(it.maxPrice)}` : ''}・庫存 {it.stock}
+                    </p>
+                    <p className="text-xs text-muted-foreground">規格：{it.variantLabel}（{it.optionCount} 個）{it.sourceId ? `・編號 ${it.sourceId}` : ''}</p>
+                    <p className="break-all text-xs text-muted-foreground">圖片來源：{it.imageSource || '無'}{it.duplicate && !allowDuplicates ? '・同名商品這次略過' : ''}</p>
                     {it.reasons.map((r) => (
                       <p key={r} className="text-xs font-bold text-destructive">{r}</p>
                     ))}
@@ -6774,26 +6895,54 @@ function ProductMigrateModal({
                     ))}
                   </div>
                 </li>
+                )
+              })}
+            </ul>
+            <p className="text-pretty text-xs text-muted-foreground">圖片只檢查網址格式。永久保存需要平台 Storage，這次不會把蝦皮圖片複製進平台。</p>
+          </section>
+        )}
+
+        {importResult && (
+          <section aria-label="匯入結果" className="space-y-2 rounded-xl border border-border/70 p-3">
+            <h3 className="text-sm font-black">寫入結果</h3>
+            <p className="text-xs text-muted-foreground">成功 {importResult.saved.length} 件，失敗 {importResult.failed.length} 件。失敗的商品沒有寫入。</p>
+            <ul className="max-h-48 space-y-1 overflow-y-auto text-xs">
+              {importResult.saved.map((item) => (
+                <li key={item.id} className="font-bold text-emerald-400">{item.name} 已寫入{item.reviewHold ? '，高價商品已送審' : ''}</li>
+              ))}
+              {importResult.failed.map((item, index) => (
+                <li key={`${item.name}-${index}`} className="font-bold text-destructive">{item.name}：{item.message}</li>
               ))}
             </ul>
-            <p className="text-pretty text-xs text-muted-foreground">蝦皮 CSV 不含圖片，匯入的商品將先使用預設圖片，請到「編輯商品」換成實拍圖。</p>
           </section>
+        )}
+
+        {duplicateCount > 0 && (
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" checked={allowDuplicates} onChange={(e) => setAllowDuplicates(e.target.checked)} className="mt-1 size-4 accent-primary" />
+            <span className="text-pretty">我要另外新增同名商品。系統不會覆蓋、修改或刪除既有商品。</span>
+          </label>
         )}
 
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-1 size-4 accent-primary" />
-          <span className="text-pretty">我確認匯入的商品皆為本人合法銷售、圖文相符，且不含違禁品或仿冒品。</span>
+          <span className="text-pretty">我確認匯入的商品皆為本人合法銷售、圖文相符，且不含違禁品或仿冒品。這次只是 CSV 匯入，不會連結蝦皮或自動同步。</span>
         </label>
 
         <div className="flex justify-end gap-2">
-          <button type="button" onClick={onClose} className={btnGhost}>取消</button>
+          <button type="button" onClick={onClose} className={btnGhost} disabled={importing}>{importResult ? '關閉' : '取消'}</button>
           <button
             type="button"
-            disabled={!canImport}
-            onClick={() => onImport(okItems.map((i) => i.product as Product))}
+            disabled={!canImport || importing}
+            onClick={() => {
+              setImporting(true)
+              void onImport(readyItems.map((item) => item.product as Product))
+                .then((outcome) => setImportResult(outcome))
+                .finally(() => setImporting(false))
+            }}
             className={`${btnPrimary} disabled:cursor-not-allowed disabled:opacity-50`}
           >
-            匯入 {okItems.length} 件商品
+            {importing ? '寫入中…' : `寫入 ${readyItems.length} 件商品`}
           </button>
         </div>
       </div>
@@ -6802,26 +6951,17 @@ function ProductMigrateModal({
 }
 
 function SellerDashboard({
-  sellers,
   seller,
   products,
-  orders,
-  payments,
-  onSwitchSeller,
+  productOwnerId,
+  sellerApproved,
   onSaveProduct,
   onPublishProduct,
   onImportProducts,
-  onToggleProduct,
+  onSetProductActive,
   onDeleteProduct,
-  onShip,
-  onConfirmPaid,
-  onPay,
   onResubmit,
-  onSetShopClosed,
-  onSimulateFail,
-  onExpireTrial,
-  onGraceDay,
-  onRefundDecision,
+  onResubmitProduct,
   smsPrefs,
   onSmsPrefs,
   smsLog,
@@ -6841,7 +6981,6 @@ function SellerDashboard({
   onSubmitTicket,
   onReadTicket,
   onNotify,
-  onCancelPlan,
   coupons,
   onCreateCoupon,
   onUpdateCoupon,
@@ -6849,12 +6988,18 @@ function SellerDashboard({
   onToggleCoupon,
   onToggleCouponShelf,
   onDeleteCoupon,
+  sellerTab,
+  onSellerTab,
+  onViewStore,
+  onPreviewStore,
+  chatId = null,
+  onChatChange,
+  onOrderNoticesChanged,
 }: {
   tickets: SupportTicket[]
   onSubmitTicket: (t: { category: string; subject: string; body: string }) => void
   onReadTicket: (id: string) => void
   onNotify: (m: string) => void
-  onCancelPlan: (cancel: boolean) => void
   coupons: Coupon[]
   onCreateCoupon: (d: CouponDraft) => string | null
   onUpdateCoupon: (id: string, d: CouponDraft) => string | null
@@ -6862,13 +7007,17 @@ function SellerDashboard({
   onToggleCoupon: (id: string) => void
   onToggleCouponShelf: (id: string) => void
   onDeleteCoupon: (id: string) => void
+  sellerTab?: SellerTab | null
+  onSellerTab?: (tab: SellerTab) => void
+  onViewStore?: () => void
+  onPreviewStore?: (draft: StorefrontSettings) => void
+  chatId?: string | null
+  onChatChange?: (chatId: string | null) => void
+  onOrderNoticesChanged?: () => void
   onSavePayment: (p: PaymentSettings) => void
   onSaveKyc: (k: KycInfo) => void
   exportLogs: ExportLog[]
   onExported: (kind: ExportLog['kind'], rows: number) => void
-  onSimulateFail: () => void
-  onExpireTrial: () => void
-  onGraceDay: () => void
   onRefundDecision: (id: string, accept: boolean) => void
   notices: SellerNotice[]
   onReadNotices: () => void
@@ -6878,35 +7027,68 @@ function SellerDashboard({
   appeals: Appeal[]
   onAppeal: (a: { sellerId: string; kind: 'product' | 'ban' | 'seller'; productId?: string; productName: string; text: string }) => void
   reports?: Report[]
-  sellers: Seller[]
   seller: Seller
   products: Product[]
   orders: Order[]
-  payments: Payment[]
   smsPrefs: SmsPrefs
   onSmsPrefs: (p: SmsPrefs) => void
   smsLog: SmsMessage[]
-  onSetShopClosed: (closed: boolean) => void
-  onSwitchSeller: (id: string) => void
-  onSaveProduct: (p: Product) => void
+  productOwnerId: string | null
+  sellerApproved: boolean
+  onSaveProduct: (p: Product) => Promise<Product | null>
   onPublishProduct: (id: string) => void
-  onImportProducts: (ps: Product[]) => void
-  onToggleProduct: (id: string) => void
+  onImportProducts: (ps: Product[]) => Promise<ProductImportResult>
+  onSetProductActive: (id: string, active: boolean) => Promise<boolean>
   onDeleteProduct: (id: string) => void
   onShip: (id: string) => void
   onConfirmPaid: (id: string) => void
-  onPay: (method: PayMethod, info: { last4?: string }) => void
   onResubmit: () => void
+  onResubmitProduct: (id: string) => void | Promise<void>
 }) {
-  const [tab, setTab] = useState<'products' | 'orders' | 'coupons' | 'notices' | 'plan' | 'account' | 'support' | 'security'>('products')
+  const [resubmitBusyId, setResubmitBusyId] = useState<string | null>(null)
+  const resubmitBusy = useRef<string | null>(null)
+  const resubmitProduct = (id: string) => {
+    if (resubmitBusy.current) return
+    resubmitBusy.current = id
+    setResubmitBusyId(id)
+    void Promise.resolve(onResubmitProduct(id)).finally(() => {
+      resubmitBusy.current = null
+      setResubmitBusyId(null)
+    })
+  }
+  const [focusOrderId, setFocusOrderId] = useState<string | null>(null)
+  const [tabState, setTabState] = useState<SellerTab>(sellerTab ?? 'products')
+  const tab = sellerTab ?? tabState
+  const setTab = (value: SellerTab) => {
+    setTabState(value)
+    onSellerTab?.(value)
+  }
+  const [chatUnread, setChatUnread] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      const { data } = await supabase.auth.getUser()
+      const uid = data.user?.id
+      if (!uid || cancelled) return
+      const result = await fetchSellerChats()
+      if (cancelled || result.error) return
+      setChatUnread(result.chats.filter((chat) => chat.sellerUserId === uid).reduce((sum, chat) => sum + chat.unread, 0))
+    }
+    void load()
+    const timer = window.setInterval(() => void load(), 15000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
   const [couponFormOpen, setCouponFormOpen] = useState(false)
   const [editCouponId, setEditCouponId] = useState<string | null>(null)
   const [editing, setEditing] = useState<Product | null | 'new'>(null)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [migrating, setMigrating] = useState(false)
-  const [renewOpen, setRenewOpen] = useState(false)
-  const [renewReason, setRenewReason] = useState<string | null>(null)
-  const closed = isClosed(seller)
+  const [delistTarget, setDelistTarget] = useState<{ id: string; name: string } | null>(null)
+  const billingReady = seller.plan.billingLinked === true
+  const closed = billingReady && isClosed(seller)
   const unreadNotices = notices.filter((n) => !n.read)
   const [appealTarget, setAppealTarget] = useState<{ kind: 'product' | 'ban' | 'seller'; productId?: string; name: string } | null>(null)
   const productAppeal = (productId?: string) => appeals.find((a) => a.kind === 'product' && a.productId === productId)
@@ -6944,23 +7126,15 @@ function SellerDashboard({
     setAppealTarget(null)
   }
 
-  const openRenew = (reason: string | null = null) => {
-    setRenewReason(reason)
-    setRenewOpen(true)
-  }
-  const guard = (action: string, fn: () => void) => () => {
+  const guard = (_action: string, fn: () => void) => () => {
     if (closed) {
-      openRenew(action)
+      onNotify('賣場目前關閉，月費串接完成前不會用測試開關關店')
       return
     }
     fn()
   }
 
-  const myProducts = products.filter((p) => p.sellerId === seller.id)
-  const myOrders = orders.filter((o) => o.sellerId === seller.id)
-  const myPayments = payments.filter((p) => p.sellerId === seller.id)
-  const pendingShip = myOrders.filter((o) => o.status === '待出貨').length
-  const revenue = myOrders.reduce((s, o) => s + o.total, 0)
+  const myProducts = products.filter((p) => !!productOwnerId && p.sellerId === productOwnerId)
   const plan = planLabel[seller.plan.status]
 
   if (seller.suspended) {
@@ -6981,12 +7155,6 @@ function SellerDashboard({
         {appealTarget && (
           <AppealModal kind={appealTarget.kind} targetName={appealTarget.name} onClose={() => setAppealTarget(null)} onSubmit={submitAppeal} />
         )}
-        <label className="flex items-center gap-2 text-xs font-bold text-muted-foreground">
-          切換測試店家
-          <select className={`${inputCls} w-auto py-1.5`} value={seller.id} onChange={(e) => onSwitchSeller(e.target.value)}>
-            {sellers.map((s) => <option key={s.id} value={s.id}>{s.name}{s.suspended ? '（已封鎖）' : ''}</option>)}
-          </select>
-        </label>
       </div>
     )
   }
@@ -7021,39 +7189,33 @@ function SellerDashboard({
             {seller.verify === 'pending' && <Pill tone="warn"><Clock className="size-3" />待平台審核</Pill>}
             {seller.verify === 'rejected' && <Pill tone="bad"><Ban className="size-3" />審核退回</Pill>}
           </div>
-          <p className="text-sm text-muted-foreground">店家後台・負責人 {seller.owner}・證件 {maskId(seller.idNo)}</p>
+          <p className="text-sm text-muted-foreground">店家後台・負責人 {seller.owner || '尚未填寫'}{seller.idNo ? `・證件 ${maskId(seller.idNo)}` : ''}</p>
         </div>
-        <div className="flex w-full flex-col gap-3 md:w-auto md:flex-row md:flex-wrap md:items-center">
-          <div className="flex flex-col items-start gap-1.5 text-xs font-bold text-muted-foreground md:flex-row md:items-center md:gap-2">
-            賣場狀態（測試）
-            <ShopStatusSwitch closed={closed} onChange={onSetShopClosed} />
-          </div>
-          <label className="flex flex-col items-start gap-1.5 text-xs font-bold text-muted-foreground md:flex-row md:items-center md:gap-2">
-            測試店家
-            <select className={`${inputCls} w-full py-1.5 md:w-auto`} value={seller.id} onChange={(e) => onSwitchSeller(e.target.value)}>
-              {sellers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </label>
-        </div>
+        {sellerApproved && onViewStore && (
+          <button type="button" onClick={onViewStore} className={btnPrimary}>
+            <Store className="size-4" />查看我的賣場
+          </button>
+        )}
+        <Pill tone={billingReady ? plan.tone : 'neutral'}>{billingReady ? plan.text : '月費功能建置中'}</Pill>
       </div>
 
-      {closed && (
+      {billingReady && closed && (
         <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl bg-destructive p-4 text-sm font-bold text-card shadow-sm">
           <CircleAlert className="size-5 shrink-0" />
           <p className="min-w-0 flex-1">您的月費已於 {fmtDate(seller.plan.nextDate)} 到期，系統已自動暫停您的賣場營業與商品刊登！</p>
-          <button type="button" onClick={() => openRenew()} className="inline-flex items-center justify-center gap-1.5 rounded-full bg-card px-5 py-2 text-sm font-bold text-destructive transition hover:brightness-95 active:scale-[0.98]">
+          <button type="button" onClick={() => setTab('plan')} className="inline-flex items-center justify-center gap-1.5 rounded-full bg-card px-5 py-2 text-sm font-bold text-destructive transition hover:brightness-95 active:scale-[0.98]">
             立即續費 {money(PLAN_TOTAL)}（含稅）
           </button>
         </div>
       )}
 
-      {seller.plan.status === 'grace' && (
+      {billingReady && seller.plan.status === 'grace' && (
         <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm font-bold text-amber-300">
           <TriangleAlert className="size-5 shrink-0" />
           <p className="min-w-0 flex-1 text-pretty">
             本月月費（{money(PLAN_TOTAL)}，含 5% 營業稅）扣款失敗！已進入 {GRACE_DAYS} 天補繳緩衝期（剩餘 {graceLeft(seller.plan)} 天），請儘速更新信用卡資訊以維持店鋪營運。
           </p>
-          <button type="button" onClick={() => openRenew()} className={btnPrimary}>立即補繳 / 更新卡號</button>
+          <button type="button" onClick={() => setTab('plan')} className={btnPrimary}>查看月費狀態</button>
         </div>
       )}
 
@@ -7081,29 +7243,30 @@ function SellerDashboard({
           <button type="button" onClick={onResubmit} className={btnPrimary}>重新送審</button>
         </div>
       )}
-      {seller.plan.status === 'due' && seller.verify === 'approved' && (
+      {billingReady && seller.plan.status === 'due' && seller.verify === 'approved' && (
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm text-amber-300">
           <Receipt className="size-5 shrink-0" />
           <p className="min-w-0 flex-1">本期月費 {money(PLAN_TOTAL)}（含 5% 營業稅）尚未繳納（應繳日 {seller.plan.nextDate}），逾期將暫停上架權限。</p>
-          <button type="button" onClick={() => { setTab('plan'); openRenew() }} className={btnPrimary}>立即續費</button>
+          <button type="button" onClick={() => setTab('plan')} className={btnPrimary}>查看月費狀態</button>
         </div>
       )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[
-          { label: '前台上架商品', value: closed ? 0 : myProducts.filter((p) => p.active && !p.flagged).length, icon: Package },
-          { label: '待出貨訂單', value: pendingShip, icon: Truck },
-          { label: '累計營收', value: money(revenue), icon: TrendingUp },
-          { label: '方案狀態', value: plan.text, icon: Wallet },
-        ].map((s) => (
-          <div key={s.label} className={`${hoverPanelCls} flex flex-col items-start gap-2.5 p-3.5 md:flex-row md:items-center md:gap-3 md:p-4`}>
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-brand-ink md:size-10"><s.icon className="size-5" /></span>
-            <div className="min-w-0">
-              <p className="text-xs text-muted-foreground">{s.label}</p>
-              <p className="text-base font-black">{s.value}</p>
-            </div>
+        <div className={`${hoverPanelCls} flex flex-col items-start gap-2.5 p-3.5 md:flex-row md:items-center md:gap-3 md:p-4`}>
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-brand-ink md:size-10"><Package className="size-5" /></span>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">前台上架商品</p>
+            <p className="text-base font-black">{closed ? 0 : myProducts.filter((p) => p.active && !p.draft && !p.flagged && !priceReviewBlocksPublic(p)).length}</p>
           </div>
-        ))}
+        </div>
+        <SellerSnapshotCards />
+        <div className={`${hoverPanelCls} flex flex-col items-start gap-2.5 p-3.5 md:flex-row md:items-center md:gap-3 md:p-4`}>
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-brand-ink md:size-10"><Wallet className="size-5" /></span>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">方案狀態</p>
+            <p className="text-base font-black">{plan.text}</p>
+          </div>
+        </div>
       </div>
 
       <Tabs
@@ -7111,11 +7274,14 @@ function SellerDashboard({
         onChange={setTab}
         tabs={[
           { id: 'products', label: '商品管理', icon: <Package className="size-4" /> },
-          { id: 'orders', label: '訂單出貨', icon: <Truck className="size-4" />, badge: pendingShip },
+          { id: 'orders', label: '訂單出貨', icon: <Truck className="size-4" /> },
+          { id: 'reports', label: '營運報表', icon: <TrendingUp className="size-4" /> },
+          { id: 'messages', label: '買家訊息', icon: <MessageCircle className="size-4" />, badge: chatUnread },
           { id: 'coupons', label: '優惠券管理', icon: <Ticket className="size-4" /> },
           { id: 'notices', label: '通知中心', icon: <Bell className="size-4" />, badge: unreadNotices.length },
           { id: 'plan', label: '方案與月費管理', icon: <Wallet className="size-4" />, badge: seller.plan.status === 'due' || seller.plan.status === 'grace' || closed ? 1 : 0 },
           { id: 'account', label: '帳號設定', icon: <Settings className="size-4" /> },
+          { id: 'storefront', label: '賣場裝潢', icon: <Store className="size-4" /> },
           { id: 'security', label: '帳戶安全', icon: <LockKeyhole className="size-4" /> },
           { id: 'support', label: '客服中心', icon: <Mail className="size-4" />, badge: tickets.filter((t) => t.unread).length },
         ]}
@@ -7173,9 +7339,17 @@ function SellerDashboard({
       )}
 
       {tab === 'notices' && (
-        <section className="space-y-3" aria-label="通知中心">
+        <div className="space-y-5">
+          <OrderNotifications
+            onOpenOrder={(id) => {
+              setFocusOrderId(id)
+              setTab('orders')
+            }}
+            onChanged={onOrderNoticesChanged}
+          />
+          <section className="space-y-3" aria-label="平台通知">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-base font-black">通知中心（{notices.length}）</h2>
+            <h2 className="text-base font-black">平台通知（{notices.length}）</h2>
             {unreadNotices.length > 0 && (
               <button type="button" onClick={onReadNotices} className={`${btnGhost} px-3 py-1.5 text-xs`}>全部標示已讀</button>
             )}
@@ -7220,14 +7394,15 @@ function SellerDashboard({
               ))}
             </ul>
           )}
-        </section>
+          </section>
+        </div>
       )}
 
       {tab === 'account' && (
         <div className="space-y-5">
-          <SellerKycPanel seller={seller} onSave={onSaveKyc} />
+          <SellerKycPanel seller={seller} />
           <SellerPaymentSettings key={seller.id} seller={seller} onSave={onSavePayment} />
-          <SellerExportPanel products={myProducts} orders={myOrders} logs={exportLogs} onExported={onExported} />
+          <SellerExportPanel products={myProducts} logs={exportLogs} onExported={onExported} />
           <SmsNotifySettings prefs={smsPrefs} onChange={onSmsPrefs} log={smsLog} />
         </div>
       )}
@@ -7242,7 +7417,7 @@ function SellerDashboard({
             <div className="min-w-0 flex-1">
               <h3 className="text-sm font-black">一鍵商品搬家｜從蝦皮匯入商品</h3>
               <p className="mt-0.5 text-pretty text-xs leading-relaxed text-muted-foreground">
-                上傳蝦皮賣家中心匯出的商品 CSV，系統自動比對欄位、檢查違禁詞與價格上限，確認後一次批次上架。
+                上傳符合平台欄位的 CSV。這不是蝦皮 API，也不會自動同步。確認後才寫入自己的商品；超過 {money(REVIEW_PRICE_LIMIT)} 由資料庫送審。
               </p>
             </div>
             <button type="button" onClick={guard('一鍵商品搬家', () => setMigrating(true))} className={btnPrimary}>
@@ -7250,7 +7425,10 @@ function SellerDashboard({
             </button>
           </section>
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-black">我的商品（{myProducts.length}）</h2>
+            <div>
+              <h2 className="text-base font-black">我的商品（{myProducts.length}）</h2>
+              <p className="text-xs text-muted-foreground">已售出件數只計算有效完成交易。目前沒有可信成交時顯示 0，不會採用舊的展示數字，也不會清掉資料庫裡的 sold 欄位。</p>
+            </div>
             <button type="button" onClick={guard('新增商品', () => setEditing('new'))} className={btnPrimary}><Plus className="size-4" />上架新商品</button>
           </div>
           {myProducts.length === 0 ? (
@@ -7262,21 +7440,29 @@ function SellerDashboard({
                   <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70"><ProductImage src={p.image} alt={p.name} /></div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{p.name}</p>
-                    <p className="text-xs text-muted-foreground">{p.category}・已售 {p.sold}</p>
+                    <p className="text-xs text-muted-foreground">{p.category}・{soldLabel(p)}</p>
                   </div>
                   <p className="w-24 text-sm font-black text-brand-ink">{money(p.price)}</p>
                   <p className={`w-20 text-sm font-bold ${p.stock <= 5 ? 'text-destructive' : ''}`}>庫存 {p.stock}</p>
-                  <button type="button" disabled={!!p.draft} onClick={guard('調整商品上下架', () => onToggleProduct(p.id))} aria-pressed={p.active} className="shrink-0 disabled:cursor-default">
+                  <span className="shrink-0">
                     {p.draft ? (
                       <Pill tone="warn"><Eye className="size-3" />草稿・尚未發佈</Pill>
                     ) : p.flagged ? (
                       <Pill tone="bad"><Flag className="size-3" />被檢舉・審核中已隱藏</Pill>
+                    ) : priceReviewRejected(p) ? (
+                      <Pill tone="bad"><Ban className="size-3" />已退回・尚未公開</Pill>
+                    ) : priceReviewPending(p) ? (
+                      <Pill tone="warn"><Clock className="size-3" />審核中・尚未公開</Pill>
+                    ) : !p.active ? (
+                      <Pill tone="neutral">已下架</Pill>
+                    ) : topPrice(p) > REVIEW_PRICE_LIMIT && !p.reviewApproved ? (
+                      <Pill tone="warn"><Clock className="size-3" />高價未核准・尚未公開</Pill>
                     ) : closed ? (
                       <Pill tone="bad"><Ban className="size-3" />已下架隱藏（賣場關閉）</Pill>
                     ) : (
                       <Pill tone={p.active ? 'ok' : 'neutral'}>{p.active ? '上架中' : '已下架'}</Pill>
                     )}
-                  </button>
+                  </span>
                   {(() => {
                     const { ap, button } = renderProductAppeal(p.id, p.name, '申訴')
                     return ap ? <Pill tone={appealStatusMeta[ap.status].tone}>{appealStatusMeta[ap.status].text}</Pill> : button
@@ -7285,6 +7471,37 @@ function SellerDashboard({
                     <button type="button" onClick={() => setPreviewId(p.id)} className={`${btnGhost} px-3`} aria-label={`預覽 ${p.name}`}><Eye className="size-4" /></button>
                     {p.draft && (
                       <button type="button" onClick={guard('發佈商品', () => onPublishProduct(p.id))} className={`${btnPrimary} px-3.5 text-xs`}><Send className="size-4" />發佈商品</button>
+                    )}
+                    {!p.draft && p.active && (
+                      <button type="button" onClick={guard('下架商品', () => setDelistTarget({ id: p.id, name: p.name }))} className={`${btnGhost} px-3.5 text-xs`}>下架商品</button>
+                    )}
+                    {!p.draft && !p.active && (
+                      <button
+                        type="button"
+                        onClick={guard('重新上架', () => {
+                          if (p.flagged) {
+                            onNotify('此商品因被檢舉已鎖定，不能直接重新上架')
+                            return
+                          }
+                          if (priceReviewRejected(p)) {
+                            onNotify('此商品已退回，請先重新送審並等管理員核准後才能公開')
+                            return
+                          }
+                          if (priceReviewBlocksPublic(p)) {
+                            onNotify('此商品仍待高價審核，核准前不能公開')
+                            return
+                          }
+                          void onSetProductActive(p.id, true)
+                        })}
+                        className={`${btnPrimary} px-3.5 text-xs`}
+                      >
+                        重新上架
+                      </button>
+                    )}
+                    {priceReviewRejected(p) && (
+                      <button type="button" disabled={resubmitBusyId !== null} onClick={guard('重新送審', () => resubmitProduct(p.id))} className={`${btnPrimary} px-3.5 text-xs disabled:cursor-not-allowed disabled:opacity-50`}>
+                        {resubmitBusyId === p.id ? '送審中' : '重新送審'}
+                      </button>
                     )}
                     <button type="button" onClick={guard('編輯商品', () => setEditing(p))} className={`${btnGhost} px-3`} aria-label={`編輯 ${p.name}`}><Pencil className="size-4" /></button>
                     <button type="button" onClick={guard('刪除商品', () => onDeleteProduct(p.id))} className={`${btnGhost} px-3 hover:text-destructive`} aria-label={`刪除 ${p.name}`}><Trash2 className="size-4" /></button>
@@ -7297,65 +7514,16 @@ function SellerDashboard({
       )}
 
       {tab === 'orders' && (
-        <section className="space-y-3" aria-label="訂單出貨">
-          <h2 className="text-base font-black">訂單處理（{myOrders.length}）</h2>
-          {myOrders.length === 0 ? (
-            <p className={`${panelCls} p-10 text-center text-sm text-muted-foreground`}>目前沒有訂單</p>
-          ) : (
-            <ul className="space-y-3">
-              {myOrders.map((o) => (
-                <li key={o.id} className={`${panelCls} p-4`}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-mono text-sm font-bold">{o.id}</p>
-                    {o.live && <Pill tone="brand">新訂單</Pill>}
-                    <Pill tone={o.status === '待出貨' ? 'warn' : o.status === '已出貨' ? 'brand' : 'ok'}>{o.status}</Pill>
-                    <Pill tone={o.payStatus === '已付款' ? 'ok' : 'warn'}>{o.pay === 'card' ? '信用卡' : 'ATM'}・{o.payStatus}</Pill>
-                    <span className="ml-auto text-xs text-muted-foreground">{o.date}</span>
-                  </div>
-                  <p className="mt-2 text-sm">{o.items.map((i) => `${i.name}（${i.variant}）×${i.qty}`).join('、')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">買家 {o.buyer}・{SHIP[o.shipMethod].label}・{o.shipTo}</p>
-                  {o.giftNote && (
-                    <p className="mt-2 flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-bold text-brand-ink">
-                      <Gift className="size-4 shrink-0" aria-hidden />
-                      出貨請隨包裹附上贈品：{o.giftNote}（折扣碼 {o.couponCode}）
-                    </p>
-                  )}
-                  {o.refund && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 p-3 text-xs text-amber-300">
-                      <Undo2 className="size-4 shrink-0" />
-                      <p className="min-w-0 flex-1">
-                        <span className="font-bold">買家申請{o.refund.type === 'return' ? '退貨退款' : '退款'}</span>：{o.refund.reason}
-                        {o.refund.note ? `・${o.refund.note}` : ''}
-                      </p>
-                      {o.refund.status === 'pending' ? (
-                        <>
-                          <button type="button" onClick={() => onRefundDecision(o.id, true)} className={`${btnPrimary} px-3 py-1.5 text-xs`}>同意</button>
-                          <button type="button" onClick={() => onRefundDecision(o.id, false)} className={`${btnGhost} px-3 py-1.5 text-xs`}>拒絕</button>
-                        </>
-                      ) : (
-                        <Pill tone={o.refund.status === 'accepted' ? 'ok' : 'bad'}>{o.refund.status === 'accepted' ? '已同意' : '已拒絕'}</Pill>
-                      )}
-                    </div>
-                  )}
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-black text-brand-ink">{money(o.total)} <span className="text-xs font-medium text-muted-foreground">（含運 {money(o.shipping)}）</span></p>
-                    <div className="flex items-center gap-2">
-                      {o.tracking && <span className="text-xs text-muted-foreground">物流單號 {o.tracking}</span>}
-                      {o.payStatus === '待匯款' && (
-                        <button type="button" onClick={() => onConfirmPaid(o.id)} className={btnGhost}><Banknote className="size-4" />確認已收款</button>
-                      )}
-                      {o.status === '待出貨' && (
-                        <button type="button" disabled={o.payStatus === '待匯款'} onClick={() => onShip(o.id)} className={btnPrimary}>
-                          <Truck className="size-4" />標記出貨
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <SellerOrdersPanel focusOrderId={focusOrderId} />
+      )}
+
+      {tab === 'reports' && (
+        <SellerReportPanel
+          onOpenOrder={(id) => {
+            setFocusOrderId(id)
+            setTab('orders')
+          }}
+        />
       )}
 
       {tab === 'security' && (
@@ -7366,110 +7534,62 @@ function SellerDashboard({
 
       {tab === 'support' && (
         <section aria-label="客服中心">
-          <SupportCenter role="seller" author={seller.name} tickets={tickets} onSubmit={onSubmitTicket} onRead={onReadTicket} />
+          <SupportCenter role="seller" author={seller.name} userId={productOwnerId ?? undefined} tickets={tickets} onSubmit={onSubmitTicket} onRead={onReadTicket} />
         </section>
       )}
 
+      {tab === 'messages' && (
+        <section aria-label="買家訊息">
+          <SellerChatPanel role="seller" restoreChatId={chatId} onActiveChange={onChatChange} onUnread={setChatUnread} />
+        </section>
+      )}
+
+      {tab === 'storefront' && (
+        <StorefrontEditor
+          sellerUserId={seller.userId ?? productOwnerId}
+          storeName={seller.name}
+          approved={sellerApproved && seller.verify === 'approved'}
+          onPreview={(draft) => onPreviewStore?.(draft)}
+          onViewPublic={() => onViewStore?.()}
+          products={myProducts.map((p) => ({
+            id: p.id,
+            name: p.name,
+            priceLabel: money(p.price),
+            image: p.image,
+            category: p.category,
+            public: p.active && !p.draft && !p.flagged && !priceReviewBlocksPublic(p),
+          }))}
+          onNotify={onNotify}
+        />
+      )}
+
       {tab === 'plan' && (
-        <section className="space-y-5" aria-label="方案與月費管理">
-          <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-            <div className={`${panelCls} relative overflow-hidden p-5`}>
-              <div aria-hidden className="absolute -right-10 -top-10 size-40 rounded-full bg-accent" />
-              <div className="relative">
-                <p className="text-xs font-bold text-muted-foreground">目前方案</p>
-                <h2 className="mt-1 text-xl font-black">標準賣家方案</h2>
-                <p className="mt-1 text-3xl font-black text-brand-ink">{money(PLAN_TOTAL)} <span className="text-sm font-medium text-muted-foreground">/ 月（含稅）</span></p>
-                <p className="mt-1 text-xs text-muted-foreground">月費 {money(PLAN_PRICE)}（未稅）＋ 營業稅 5% {money(PLAN_TAX)}</p>
-                <p className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-300">
-                  <Receipt className="mt-0.5 size-4 shrink-0" />
-                  <span>本平台每月依法開立電子發票，月費未稅價 {money(PLAN_PRICE)} 另加 5% 營業稅 {money(PLAN_TAX)}，實際扣款金額為含稅 {money(PLAN_TOTAL)}。</span>
-                </p>
-                <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1.5 text-sm font-bold text-secondary-foreground">
-                  <Clock className="size-4" />本期週期：{periodText(seller.plan)}
-                </p>
-                <ul className="mt-4 grid gap-1.5 text-sm text-muted-foreground sm:grid-cols-2">
-                  {['不限商品上架數', '專屬賣場與藍勾勾標章', '拆單與金流串接', '電子發票自動開立'].map((t) => (
-                    <li key={t} className="flex items-center gap-1.5"><Check className="size-4 text-emerald-400" />{t}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-            <div className={`${panelCls} space-y-3 p-5`}>
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-bold">扣款狀態</p>
-                <Pill tone={plan.tone}>{plan.text}</Pill>
-              </div>
-              <dl className="space-y-2 text-sm">
-                <div className="flex justify-between"><dt className="text-muted-foreground">賣場狀態</dt><dd className="font-bold">{closed ? '暫時關閉・買家看到維護提示' : '營業中・商品顯示於前台'}</dd></div>
-                <div className="flex justify-between"><dt className="text-muted-foreground">{closed ? '到期日' : '下期扣款日'}</dt><dd className="font-bold">{fmtDate(seller.plan.nextDate)}</dd></div>
-                <div className="flex justify-between"><dt className="text-muted-foreground">付款方式</dt><dd className="font-bold">{seller.plan.method === 'card' ? `信用卡 •••• ${seller.plan.cardLast4 ?? '----'}` : '銀行轉帳 / ATM'}</dd></div>
-                <div className="flex justify-between"><dt className="text-muted-foreground">自動扣款</dt><dd className="font-bold">{seller.plan.autoPay ? '已啟用' : '未啟用'}</dd></div>
-              </dl>
-              <button type="button" onClick={() => openRenew()} disabled={seller.plan.status === 'verifying'} className={`${btnPrimary} w-full`}>
-                {seller.plan.status === 'verifying'
-                  ? 'ATM 對帳核銷中'
-                  : seller.plan.status === 'grace'
-                    ? '立即補繳 / 更新卡號'
-                    : seller.plan.status === 'due' || closed
-                      ? '立即續費'
-                      : '提前續費 / 更換付款方式'}
-              </button>
-              <div className="space-y-2 rounded-xl border border-dashed border-border bg-muted/50 p-3">
-                <p className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground">
-                  <FlaskConical className="size-3.5" />測試控制
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={onSimulateFail}
-                    disabled={closed || seller.plan.status === 'grace'}
-                    className={`${btnGhost} px-3 py-1.5 text-xs`}
-                  >
-                    模擬扣款失敗
-                  </button>
-                  {seller.plan.status === 'trial' && (
-                    <button type="button" onClick={onExpireTrial} className={`${btnGhost} px-3 py-1.5 text-xs`}>
-                      模擬試用到期
-                    </button>
-                  )}
-                  {seller.plan.status === 'grace' && (
-                    <button type="button" onClick={onGraceDay} className={`${btnGhost} px-3 py-1.5 text-xs`}>
-                      模擬經過 1 天（剩 {graceLeft(seller.plan)} 天）
-                    </button>
-                  )}
-                </div>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  觸發後進入 {GRACE_DAYS} 天補繳緩衝期；超過 {GRACE_DAYS} 天未補繳，狀態自動切換為「暫停營業」。
-                </p>
-              </div>
-            </div>
+        <section className="space-y-4" aria-label="方案與月費管理">
+          <div className={`${panelCls} space-y-3 p-5`}>
+            <p className="text-xs font-bold text-muted-foreground">目前方案</p>
+            <h2 className="text-xl font-black">月費功能建置中</h2>
+            <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
+              訂閱、30 天試用、自動扣款與綠界付款都尚未串接資料庫。這裡不會把賣場顯示成已繳費或試用有效，也不會因月費自動關店。商品仍可依審核狀態上架。綠界串接完成後，會在這個分頁接上真實繳費狀態。
+            </p>
+            <p className="text-sm font-bold">參考月費 {money(PLAN_TOTAL)} / 月（含稅），目前不能付款。</p>
           </div>
-
-          <SubscriptionManager
-            price={PLAN_TOTAL}
-            taxNote={`未稅 ${money(PLAN_PRICE)} ＋ 營業稅 5% ${money(PLAN_TAX)}，依法開立電子發票`}
-            nextDate={seller.plan.nextDate}
-            cancelAtPeriodEnd={!!seller.plan.cancelAtPeriodEnd}
-            disabled={closed}
-            onCancel={() => onCancelPlan(true)}
-            onResume={() => onCancelPlan(false)}
-          />
-
-          <SmsReminderCard seller={seller} onSaveKyc={onSaveKyc} />
-
-          <InvoiceVault seller={seller} payments={myPayments} />
         </section>
       )}
 
       {editing && (
         <ProductFormModal
           product={editing === 'new' ? null : editing}
-          sellerId={seller.id}
+          sellerId={productOwnerId ?? ''}
           onClose={() => setEditing(null)}
-          onSave={(p) => {
-            onSaveProduct(p)
+          onSave={async (p) => {
+            if (!sellerApproved || !productOwnerId) {
+              onNotify('尚未通過賣家審核，商品沒有寫入')
+              return
+            }
+            const saved = await onSaveProduct({ ...p, sellerId: productOwnerId })
+            if (!saved) return
             setEditing(null)
-            if (p.draft) setPreviewId(p.id)
+            if (saved.draft) setPreviewId(saved.id)
           }}
         />
       )}
@@ -7502,25 +7622,40 @@ function SellerDashboard({
       })()}
       {migrating && (
         <ProductMigrateModal
-          sellerId={seller.id}
+          sellerId={productOwnerId ?? ''}
           existingNames={new Set(myProducts.map((p) => p.name.trim()))}
           onClose={() => setMigrating(false)}
-          onImport={(ps) => {
-            onImportProducts(ps)
-            setMigrating(false)
+          onImport={async (ps) => {
+            if (!sellerApproved || !productOwnerId) {
+              onNotify('尚未通過賣家審核，商品沒有匯入')
+              return { saved: [], failed: ps.map((p) => ({ name: p.name, message: '尚未通過賣家審核' })) }
+            }
+            return onImportProducts(ps.map((p) => ({ ...p, sellerId: productOwnerId })))
           }}
         />
       )}
-      {renewOpen && (
-        <RenewModal
-          seller={seller}
-          reason={renewReason}
-          onClose={() => setRenewOpen(false)}
-          onPay={(m, info) => {
-            onPay(m, info)
-            setRenewOpen(false)
-          }}
-        />
+      {delistTarget && (
+        <Modal title="下架商品" onClose={() => setDelistTarget(null)} size="sm" z={60}>
+          <div className="space-y-4 p-5">
+            <p className="text-pretty text-sm leading-relaxed">
+              確定下架「{delistTarget.name}」？下架只會把商品從賣場隱藏，不會刪除庫存、售價、規格或歷史訂單。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDelistTarget(null)} className={btnGhost}>取消</button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = delistTarget
+                  setDelistTarget(null)
+                  void onSetProductActive(target.id, false)
+                }}
+                className={btnPrimary}
+              >
+                確認下架
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )
@@ -7530,32 +7665,130 @@ function SellerDashboard({
  * 平台總管理員後台
  * -------------------------------------------------------------------------- */
 
-function DocPreview({ seller }: { seller: Seller }) {
-  if (seller.docUrl) {
+
+function DocPreview({
+  seller,
+  onLoadedChange,
+}: {
+  seller: Seller
+  onLoadedChange?: (loaded: boolean) => void
+}) {
+  const [privateDocUrl, setPrivateDocUrl] = useState<string | null>(null)
+  const [privateDocLoading, setPrivateDocLoading] = useState(false)
+  const [privateDocError, setPrivateDocError] = useState('')
+  const [pdfOpened, setPdfOpened] = useState(false)
+  const [pdfConfirmed, setPdfConfirmed] = useState(false)
+
+  const path = seller.kycDocumentPath
+  const isPdf = path?.toLowerCase().endsWith('.pdf') ?? false
+
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl: string | null = null
+
+    setPrivateDocUrl(null)
+    setPrivateDocError('')
+    setPrivateDocLoading(Boolean(path))
+    setPdfOpened(false)
+    setPdfConfirmed(false)
+    onLoadedChange?.(false)
+
+    if (path) {
+      const loadPrivateDoc = async () => {
+        try {
+          const { data, error } = await supabase.storage
+            .from('seller-kyc')
+            .download(path)
+
+          if (cancelled) return
+
+          if (error || !data) {
+            setPrivateDocError('證件讀取失敗，請確認管理員權限')
+            return
+          }
+
+          objectUrl = URL.createObjectURL(data)
+          setPrivateDocUrl(objectUrl)
+        } catch (error) {
+          if (!cancelled) {
+            console.error('證件讀取失敗：', error)
+            setPrivateDocError('讀取證件時發生錯誤')
+          }
+        } finally {
+          if (!cancelled) setPrivateDocLoading(false)
+        }
+      }
+
+      void loadPrivateDoc()
+    }
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [path, onLoadedChange])
+
+  if (!path) {
     return (
-      <div className="overflow-hidden rounded-2xl border border-border/70 bg-muted">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={seller.docUrl} alt={`${seller.owner} 上傳的證件影本`} className="max-h-72 w-full object-contain" />
+      <div className="rounded-2xl border border-border/70 bg-muted p-5 text-center text-sm">
+        尚未上傳證件，無法批准認證
       </div>
     )
   }
-  const isCompany = /^\d{8}$/.test(seller.idNo)
+
   return (
-    <div className="rounded-2xl border border-border/70 bg-secondary p-4" role="img" aria-label={`${seller.docName} 證件預覽`}>
-      <div className="rounded-xl border border-dashed border-primary/50 bg-card p-4">
-        <p className="text-xs font-bold text-brand-ink">{isCompany ? '營業登記證明（預覽）' : '國民身分證（預覽）'}</p>
-        <div className="mt-3 flex gap-4">
-          <div className="flex h-24 w-20 shrink-0 items-center justify-center rounded-lg bg-muted"><UserRound className="size-8 text-border" /></div>
-          <div className="min-w-0 flex-1 space-y-2 text-sm">
-            <p><span className="text-xs text-muted-foreground">{isCompany ? '負責人' : '姓名'}　</span><span className="font-bold">{seller.owner}</span></p>
-            <p><span className="text-xs text-muted-foreground">{isCompany ? '統一編號' : '身分證字號'}　</span><span className="font-mono font-bold">{seller.idNo}</span></p>
-            <p className="truncate text-xs text-muted-foreground">檔案：{seller.docName}</p>
-          </div>
+    <div className="rounded-2xl border border-border/70 bg-muted p-4">
+      {privateDocLoading ? (
+        <p className="text-center text-sm">證件讀取中...</p>
+      ) : privateDocError ? (
+        <p className="text-center text-sm text-destructive">
+          {privateDocError}
+        </p>
+      ) : !privateDocUrl ? (
+        <p className="text-center text-sm">尚無可預覽的證件</p>
+      ) : isPdf ? (
+        <div className="space-y-3 text-center">
+          <a
+            href={privateDocUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setPdfOpened(true)}
+            className="block text-sm font-bold text-brand-ink underline"
+          >
+            開啟 PDF 證件
+          </a>
+
+          <button
+            type="button"
+            disabled={!pdfOpened || pdfConfirmed}
+            className={`${btnGhost} disabled:opacity-50`}
+            onClick={() => {
+              setPdfConfirmed(true)
+              onLoadedChange?.(true)
+            }}
+          >
+            {pdfConfirmed ? '已確認查看 PDF' : '我已查看並核對 PDF 證件'}
+          </button>
         </div>
-      </div>
+      ) : (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={privateDocUrl}
+            alt="賣家上傳的證件"
+            className="max-h-96 w-full object-contain"
+            onLoad={() => onLoadedChange?.(true)}
+            onError={() => {
+              onLoadedChange?.(false)
+              setPrivateDocError('證件圖片無法顯示，禁止批准')
+            }}
+          />
+        </>
+      )}
     </div>
   )
 }
+
 
 function ReviewModal({
   seller,
@@ -7570,15 +7803,39 @@ function ReviewModal({
 }) {
   const [reason, setReason] = useState('')
   const [error, setError] = useState('')
+  const [loadedDocumentPath, setLoadedDocumentPath] = useState<string | null>(null)
+
+  const documentLoaded =
+    Boolean(seller.kycDocumentPath) &&
+    loadedDocumentPath === seller.kycDocumentPath
+
+  const handleDocumentLoadedChange = useCallback(
+    (loaded: boolean) => {
+      setLoadedDocumentPath(
+        loaded ? seller.kycDocumentPath ?? null : null
+      )
+    },
+    [seller.kycDocumentPath]
+  )
+
   return (
-    <Modal title={`審查證件｜${seller.name}`} onClose={onClose} size="md" z={60}>
+    <Modal
+      title={`審查證件｜${seller.name}`}
+      onClose={onClose}
+      size="md"
+      z={60}
+    >
       <div className="space-y-4 p-5">
-        <DocPreview seller={seller} />
+        <DocPreview
+          seller={seller}
+          onLoadedChange={handleDocumentLoadedChange}
+        />
+
         <dl className="grid grid-cols-2 gap-3 text-sm">
           {[
             ['店家名稱', seller.name],
             ['負責人', seller.owner],
-            ['證件號碼', seller.idNo],
+            ['證件號碼', seller.idNo ? maskId(seller.idNo) : '未提供'],
             ['申請日期', seller.appliedAt],
           ].map(([k, v]) => (
             <div key={k} className="rounded-xl bg-muted/60 px-3 py-2">
@@ -7587,27 +7844,62 @@ function ReviewModal({
             </div>
           ))}
         </dl>
+
         {seller.verify === 'pending' ? (
           <>
+            {!documentLoaded && (
+              <p className="text-sm font-bold text-destructive">
+                證件尚未完成載入及查看，暫時無法批准認證。
+              </p>
+            )}
+
             <Field label="退回原因（退回時必填）" error={error}>
-              <input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="例如：證件影像模糊，無法辨識" />
+              <input
+                className={inputCls}
+                value={reason}
+                onChange={(e) => {
+                  setReason(e.target.value)
+                  setError('')
+                }}
+                placeholder="例如：證件影像模糊，無法辨識"
+              />
             </Field>
+
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
                 className={`${btnGhost} text-destructive`}
                 onClick={() => {
-                  if (!reason.trim()) return setError('請填寫退回原因')
+                  if (!reason.trim()) {
+                    setError('請填寫退回原因')
+                    return
+                  }
                   onReject(reason.trim())
                 }}
               >
                 <Ban className="size-4" />退回
               </button>
-              <button type="button" className={btnPrimary} onClick={onApprove}><Check className="size-4" />批准認證</button>
+
+              <button
+                type="button"
+                className={`${btnPrimary} disabled:cursor-not-allowed disabled:opacity-50`}
+                disabled={!documentLoaded}
+                onClick={() => {
+                  if (!documentLoaded) return
+                  onApprove()
+                }}
+              >
+                <Check className="size-4" />批准認證
+              </button>
             </div>
           </>
         ) : (
-          <p className="text-center text-sm text-muted-foreground">此申請已處理：{seller.verify === 'approved' ? '已批准' : `已退回（${seller.rejectReason}）`}</p>
+          <p className="text-center text-sm text-muted-foreground">
+            此申請已處理：
+            {seller.verify === 'approved'
+              ? '已批准'
+              : `已退回（${seller.rejectReason ?? '未提供原因'}）`}
+          </p>
         )}
       </div>
     </Modal>
@@ -7635,9 +7927,9 @@ function AdminDashboard({
   tickets,
   onReplyTicket,
 }: {
-  onReviewProduct: (id: string, ok: boolean) => void
+  onReviewProduct: (id: string, ok: boolean) => void | Promise<void>
   tickets: SupportTicket[]
-  onReplyTicket: (id: string, text: string) => void
+  onReplyTicket: (id: string, text: string, status: SupportTicket['status']) => void
   scamReports: ScamReport[]
   blacklist: BlacklistEntry[]
   appeals: Appeal[]
@@ -7655,12 +7947,25 @@ function AdminDashboard({
   onConfirmVerify: (id: string) => void
   onRemind: (id: string) => void
 }) {
-  const [tab, setTab] = useState<'board' | 'review' | 'fees' | 'risk' | 'listing' | 'tickets'>('board')
+  const [tab, setTab] = useState<'board' | 'review' | 'fees' | 'risk' | 'listing' | 'tickets' | 'announce'>('board')
   const [filter, setFilter] = useState<'all' | VerifyStatus>('all')
   const [reviewing, setReviewing] = useState<string | null>(null)
   const [banConfirm, setBanConfirm] = useState<string | null>(null)
   const [rejectingAppeal, setRejectingAppeal] = useState<string | null>(null)
   const [rejectReply, setRejectReply] = useState('')
+  const [reviewBusyId, setReviewBusyId] = useState<string | null>(null)
+  const reviewBusy = useRef<string | null>(null)
+  const priceReviewQueue = products.filter((p) => priceReviewPending(p))
+  const rejectedReviewQueue = products.filter((p) => priceReviewRejected(p))
+  const reviewProduct = (id: string, ok: boolean) => {
+    if (reviewBusy.current) return
+    reviewBusy.current = id
+    setReviewBusyId(id)
+    void Promise.resolve(onReviewProduct(id, ok)).finally(() => {
+      reviewBusy.current = null
+      setReviewBusyId(null)
+    })
+  }
   const openReports = reports.filter((r) => r.status === 'open').length
   const pendingAppeals = appeals.filter((a) => a.status === 'pending').length
   const suspendedSellers = sellers.filter((s) => s.suspended)
@@ -7671,15 +7976,12 @@ function AdminDashboard({
   }))
   const totalGmv = gmvBySeller.reduce((s, g) => s + g.gmv, 0)
   const maxGmv = Math.max(...gmvBySeller.map((g) => g.gmv), 1)
-  const liveToday = orders.filter((o) => o.live).reduce((s, o) => s + o.total, 0)
-  const trend = TREND.map((v, i) => (i === TREND.length - 1 ? v + liveToday : v))
-  const maxTrend = Math.max(...trend)
   const pendingCount = sellers.filter((s) => s.verify === 'pending').length
   const approved = sellers.filter((s) => s.verify === 'approved')
   const mrr = approved.filter((s) => s.plan.status === 'active').length * PLAN_PRICE
   const listed = products.filter((p) => {
     const s = sellers.find((x) => x.id === p.sellerId)
-    return p.active && !p.flagged && s?.verify === 'approved' && !isOffline(s)
+    return p.active && !p.flagged && !priceReviewBlocksPublic(p) && s?.verify === 'approved' && !isOffline(s)
   }).length
   const reviewSeller = sellers.find((s) => s.id === reviewing) ?? null
   const shown = sellers.filter((s) => filter === 'all' || s.verify === filter)
@@ -7698,8 +8000,9 @@ function AdminDashboard({
           { id: 'review', label: '實名審核中心', icon: <ShieldCheck className="size-4" />, badge: pendingCount },
           { id: 'fees', label: '店家月費追蹤', icon: <Wallet className="size-4" /> },
           { id: 'risk', label: '違規審核專區', icon: <ShieldAlert className="size-4" />, badge: openReports + pendingAppeals },
-          { id: 'listing', label: '高價商品審核', icon: <FileText className="size-4" />, badge: products.filter((p) => p.reviewHold).length },
-          { id: 'tickets', label: '客服工單', icon: <Mail className="size-4" />, badge: tickets.filter((t) => t.status === 'open').length },
+          { id: 'listing', label: '高價商品審核', icon: <FileText className="size-4" />, badge: priceReviewQueue.length },
+          { id: 'tickets', label: '客服工單', icon: <Mail className="size-4" />, badge: tickets.filter((t) => t.status === 'pending' || t.status === 'processing').length },
+          { id: 'announce', label: '公告管理', icon: <Megaphone className="size-4" /> },
         ]}
       />
 
@@ -7720,16 +8023,8 @@ function AdminDashboard({
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
             <div className={`${panelCls} p-5`}>
-              <h2 className="text-sm font-black">近 7 日 GMV</h2>
-              <div className="mt-4 flex h-44 items-end gap-2" role="img" aria-label="近 7 日 GMV 長條圖">
-                {trend.map((v, i) => (
-                  <div key={TREND_LABELS[i]} className="flex h-full flex-1 flex-col items-center justify-end gap-1.5">
-                    <span className="text-[10px] font-bold text-muted-foreground">{(v / 1000).toFixed(1)}k</span>
-                    <div className={`w-full rounded-t-lg transition-all ${i === trend.length - 1 ? 'bg-primary' : 'bg-chart-3'}`} style={{ height: `${(v / maxTrend) * 70}%` }} />
-                    <span className="text-[10px] text-muted-foreground">{TREND_LABELS[i]}</span>
-                  </div>
-                ))}
-              </div>
+              <h2 className="text-sm font-black">成交數據</h2>
+              <p className="mt-4 text-sm leading-relaxed text-muted-foreground">目前沒有已入帳的成交紀錄。這裡不會顯示估計營收或預先寫好的曲線。</p>
             </div>
             <div className={`${panelCls} p-5`}>
               <h2 className="text-sm font-black">各店家 GMV 佔比</h2>
@@ -7833,7 +8128,13 @@ function AdminDashboard({
                       <span className="font-bold">{periodText(s.plan)}</span>
                     </td>
                     <td className="px-4 py-3">{s.plan.method === 'card' ? `信用卡${s.plan.autoPay ? '（自動扣款）' : ''}` : 'ATM 轉帳'}</td>
-                    <td className="px-4 py-3"><ShopStatusSwitch closed={isClosed(s)} onChange={(c) => onSetShopClosed(s.id, c)} /></td>
+                    <td className="px-4 py-3">
+                      {s.plan.billingLinked === false ? (
+                        <span className="text-xs text-muted-foreground">月費未串接，不能測試關店</span>
+                      ) : (
+                        <ShopStatusSwitch closed={isClosed(s)} onChange={(c) => onSetShopClosed(s.id, c)} />
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       {(s.plan.status === 'due' || s.plan.status === 'overdue') && <button type="button" onClick={() => onRemind(s.id)} className={`${btnGhost} px-3 py-1.5 text-xs`}>發送催繳通知</button>}
                       {s.plan.status === 'verifying' && <button type="button" onClick={() => onConfirmVerify(s.id)} className={`${btnPrimary} px-3 py-1.5 text-xs`}>確認核銷</button>}
@@ -7852,17 +8153,16 @@ function AdminDashboard({
           <div>
             <h2 className="text-base font-black">高價商品審核</h2>
             <p className="text-sm text-muted-foreground">
-              單價超過 {money(REVIEW_PRICE_LIMIT)} 的商品會自動鎖定為「審核中」，核准後才會公開，保護買家避免高額詐騙。
+              待審核只包含尚未審過的高價商品。退回後會離開待審清單，紀錄留在下方。重複核准或退回不會再次改寫。
             </p>
           </div>
-          {products.filter((p) => p.reviewHold).length === 0 ? (
+          {priceReviewQueue.length === 0 ? (
             <p className="rounded-2xl border border-dashed border-border bg-card p-6 text-center text-sm text-muted-foreground">目前沒有等待審核的商品</p>
           ) : (
             <ul className="space-y-3">
-              {products
-                .filter((p) => p.reviewHold)
-                .map((p) => {
-                  const owner = sellers.find((x) => x.id === p.sellerId)
+              {priceReviewQueue.map((p) => {
+                  const owner = sellerByMemberId(sellers, p.sellerId)
+                  const busy = reviewBusyId === p.id
                   return (
                     <li key={p.id} className={`${panelCls} flex flex-wrap items-center gap-3 p-4`}>
                       <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70">
@@ -7871,16 +8171,16 @@ function AdminDashboard({
                       <div className="min-w-0 flex-1 space-y-1">
                         <p className="truncate text-sm font-black">{p.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {owner?.name ?? "未知賣家"}・{money(p.price)}
+                          {owner?.name ?? '未知賣家'}・最高 {money(topPrice(p))}
                         </p>
                         <Pill tone="warn">審核中・買家看不到</Pill>
                       </div>
                       <div className="flex gap-2">
-                        <button type="button" onClick={() => onReviewProduct(p.id, false)} className={`${btnGhost} px-3 py-1.5 text-xs`}>
-                          退回
+                        <button type="button" disabled={reviewBusyId !== null} onClick={() => reviewProduct(p.id, false)} className={`${btnGhost} px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50`}>
+                          {busy ? '處理中' : '退回'}
                         </button>
-                        <button type="button" onClick={() => onReviewProduct(p.id, true)} className={`${btnPrimary} px-3 py-1.5 text-xs`}>
-                          核准公開
+                        <button type="button" disabled={reviewBusyId !== null} onClick={() => reviewProduct(p.id, true)} className={`${btnPrimary} px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50`}>
+                          {busy ? '處理中' : '核准公開'}
                         </button>
                       </div>
                     </li>
@@ -7888,10 +8188,37 @@ function AdminDashboard({
                 })}
             </ul>
           )}
+          <div className="space-y-3">
+            <h3 className="text-sm font-black">已退回（{rejectedReviewQueue.length}）</h3>
+            {rejectedReviewQueue.length === 0 ? (
+              <p className="text-sm text-muted-foreground">目前沒有已退回的高價商品</p>
+            ) : (
+              <ul className="space-y-3">
+                {rejectedReviewQueue.map((p) => {
+                  const owner = sellerByMemberId(sellers, p.sellerId)
+                  return (
+                    <li key={p.id} className={`${panelCls} flex flex-wrap items-center gap-3 p-4`}>
+                      <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70">
+                        <ProductImage src={p.image} alt={p.name} />
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <p className="truncate text-sm font-black">{p.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {owner?.name ?? '未知賣家'}・最高 {money(topPrice(p))}
+                        </p>
+                        <Pill tone="bad">已退回・尚未公開</Pill>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
         </section>
       )}
 
       {tab === 'tickets' && <AdminTicketsPanel tickets={tickets} onReply={onReplyTicket} />}
+      {tab === 'announce' && <AdminAnnouncementsPanel />}
 
       {tab === 'risk' && (
         <section className="space-y-5" aria-label="違規審核專區">
@@ -8214,68 +8541,6 @@ function CategoryNav({ value, onChange }: { value: CategorySel; onChange: (v: Ca
   )
 }
 
-const REFUND_REASONS = ['商品瑕疵 / 損壞', '收到錯誤商品', '商品與頁面描述不符', '尚未收到商品', '不想要了（七天鑑賞期）', '其他']
-
-function RefundModal({
-  order,
-  sellerName,
-  onClose,
-  onSubmit,
-}: {
-  order: Order
-  sellerName: string
-  onClose: () => void
-  onSubmit: (r: { type: RefundType; reason: string; note: string }) => void
-}) {
-  const [type, setType] = useState<RefundType>('return')
-  const [reason, setReason] = useState(REFUND_REASONS[0])
-  const [note, setNote] = useState('')
-
-  return (
-    <Modal title="退貨 / 退款申請" onClose={onClose} size="md" z={70}>
-      <form
-        className="space-y-4 p-5"
-        onSubmit={(e) => {
-          e.preventDefault()
-          onSubmit({ type, reason, note: note.trim() })
-        }}
-      >
-        <p className="text-sm text-muted-foreground">
-          訂單 <span className="font-mono font-bold text-foreground">{order.id}</span>・{sellerName}・{money(order.total)}
-        </p>
-        <fieldset className="space-y-2">
-          <legend className="mb-1 text-sm font-bold">申請類型</legend>
-          {([
-            ['return', '退貨退款', '寄回商品後，由賣家確認並退款'],
-            ['refundOnly', '僅退款', '商品未收到或不需退回時使用'],
-          ] as const).map(([id, label, hint]) => (
-            <label
-              key={id}
-              className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 text-sm ${type === id ? 'border-primary bg-accent' : 'border-border'}`}
-            >
-              <input type="radio" name="refund-type" checked={type === id} onChange={() => setType(id)} className="mt-1 accent-primary" />
-              <span>
-                <span className="block font-bold">{label}</span>
-                <span className="text-xs text-muted-foreground">{hint}</span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-        <Field label="申請原因">
-          <select className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)}>
-            {REFUND_REASONS.map((r) => <option key={r}>{r}</option>)}
-          </select>
-        </Field>
-        <Field label="補充說明（選填）">
-          <textarea className={`${inputCls} min-h-24`} value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} placeholder="請描述商品狀況，可協助賣家更快處理" />
-        </Field>
-        <DisclaimerNote />
-        <button type="submit" className={`${btnPrimary} w-full`}>送出申請給賣家</button>
-      </form>
-    </Modal>
-  )
-}
-
 const PHONE_OTP = '246810'
 
 function PhoneOtpModal({ onClose, onVerified }: { onClose: () => void; onVerified: () => void }) {
@@ -8446,9 +8711,7 @@ function CheckinZone({
               <button type="button" onClick={() => setShowLedger((v) => !v)} aria-expanded={showLedger} className="font-bold text-brand-ink hover:underline">
                 {showLedger ? '收合點數明細' : '查看點數收支明細'}
               </button>
-              <button type="button" onClick={onNextDay} className="inline-flex items-center gap-1 font-bold text-muted-foreground hover:text-foreground">
-                <FlaskConical className="size-3.5" />模擬隔天
-              </button>
+              <span className="text-muted-foreground">簽到點數只留在這次瀏覽</span>
             </div>
             {showLedger && (
               <ul className="max-h-48 space-y-1.5 overflow-y-auto rounded-2xl bg-muted/50 p-3 text-xs" aria-label="點數收支明細">
@@ -8580,9 +8843,9 @@ function TakedownModal({
 
 function DisclaimerNote() {
   return (
-    <div role="note" className="flex gap-3 rounded-2xl border-2 border-destructive bg-red-500/10 p-4 text-sm font-bold leading-relaxed text-red-300">
-      <ShieldAlert className="mt-0.5 size-5 shrink-0" />
-      <p className="text-pretty">
+    <div role="note" className="flex items-start gap-2 rounded-xl border border-destructive/80 bg-red-500/10 px-3 py-2 text-xs font-bold leading-snug text-red-300">
+      <ShieldAlert className="mt-px size-3.5 shrink-0" aria-hidden />
+      <p>
         本平台為 SaaS 技術服務商，交易契約存在於買賣雙方之間。平台不代收付商品貨款，售後與退換貨請直接透過上方按鈕與店鋪賣家聯繫。
       </p>
     </div>
@@ -8599,7 +8862,7 @@ const FOOTER_LINKS = [
 function SiteFooter({ onReport, onTerms }: { onReport: () => void; onTerms: () => void }) {
   return (
     <footer className="border-t border-border/70 bg-card">
-      <section className="mx-auto grid max-w-7xl gap-3 px-4 pt-8 md:grid-cols-3" aria-label="法律與平台合規專區">
+      <section className="mx-auto grid max-w-[100rem] gap-3 px-4 pt-8 md:grid-cols-3" aria-label="法律與平台合規專區">
         <div className="rounded-2xl border border-border/70 bg-muted/40 p-4">
           <h3 className="flex items-center gap-1.5 text-sm font-black"><FileText className="size-4 text-brand-ink" />消保法賣家營業資訊揭露</h3>
           <p className="mt-1.5 text-pretty text-xs leading-relaxed text-muted-foreground">
@@ -8620,7 +8883,7 @@ function SiteFooter({ onReport, onTerms }: { onReport: () => void; onTerms: () =
           <p className="mt-1.5 text-pretty text-xs leading-relaxed text-muted-foreground">{TAX_NOTE}</p>
         </div>
       </section>
-      <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-8 md:flex-row md:items-start md:justify-between">
+      <div className="mx-auto flex max-w-[100rem] flex-col gap-4 px-4 py-8 md:flex-row md:items-start md:justify-between">
         <div className="max-w-md space-y-1.5">
           <p className="text-base font-black">買個 Pay 服</p>
           <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
@@ -8644,36 +8907,113 @@ function SiteFooter({ onReport, onTerms }: { onReport: () => void; onTerms: () =
           </ul>
         </nav>
       </div>
-      <p className="border-t border-border/60 px-4 py-3 text-center text-xs text-muted-foreground">© 2026 買個 Pay 服・本站為原型展示，所有交易皆為模擬</p>
+      <p className="border-t border-border/60 px-4 py-3 text-center text-xs text-muted-foreground">© 2026 買個 Pay 服・金流與物流尚未開放</p>
     </footer>
   )
 }
 
 export default function OpenMarketplace() {
-  const [role, setRole] = useState<Role>('buyer')
-  const [page, setPage] = useState<'market' | 'rewards'>('market')
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const initialNavRef = useRef<MarketplaceNav | null>(null)
+  if (!initialNavRef.current) initialNavRef.current = readMarketplaceNav(searchParams)
+  const initialNav = initialNavRef.current
+  const navRef = useRef<MarketplaceNav>(initialNav)
+  const clearPrivateNavRef = useRef<(() => void) | null>(null)
+  const urlWriteRef = useRef(false)
+
+  const [role, setRoleState] = useState<Role>('buyer')
+  const [page, setPageState] = useState<'market' | 'rewards'>(initialNav.page)
   const [account, setAccount] = useState<{ name: string } | null>(null)
-  const [sellers, setSellers] = useState<Seller[]>(SEED_SELLERS)
+  const [authUserId, setAuthUserId] = useState<string | null>(null)
+  const [authResolved, setAuthResolved] = useState(false)
+  const [sellerStatusReady, setSellerStatusReady] = useState(false)
+  const [sellerApproved, setSellerApproved] = useState(false)
+  const [ownedSellerId, setOwnedSellerId] = useState<string | null>(null)
+  
+useEffect(() => {
+  const syncUser = (user: { id: string; email?: string; user_metadata?: { name?: string } } | null) => {
+    if (user) {
+      const name = user.user_metadata?.name || user.email?.split('@')[0] || '會員'
+      setAuthUserId(user.id)
+      setAccount({ name })
+    } else {
+      setAuthUserId(null)
+      setOwnedSellerId(null)
+      setSellerApproved(false)
+      setMySellerId('')
+      setAccount(null)
+      setSellerAccess(false)
+      setRoleState('buyer')
+      clearPrivateNavRef.current?.()
+    }
+    setAuthResolved(true)
+  }
+
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    syncUser(session?.user ?? null)
+  })
+
+  supabase.auth.getUser().then(({ data }) => {
+    syncUser(data.user)
+  })
+
+  return () => subscription.unsubscribe()
+}, [])
+  const [sellers, setSellers] = useState<Seller[]>([])
+  const [adminSellerApplications, setAdminSellerApplications] = useState<Seller[]>([])
   const [products, setProducts] = useState<Product[]>([])
-  const [orders, setOrders] = useState<Order[]>(SEED_ORDERS)
-  const [payments, setPayments] = useState<Payment[]>(SEED_PAYMENTS)
+  const [productsLoaded, setProductsLoaded] = useState(false)
+  const [orders, setOrders] = useState<Order[]>([])
+  const [payments, setPayments] = useState<Payment[]>([])
   const [reports, setReports] = useState<Report[]>([])
   const [cart, setCart] = useState<CartLine[]>([])
-  const [mySellerId, setMySellerId] = useState('s1')
+  const [mySellerId, setMySellerId] = useState('')
   const [followed, setFollowed] = useState<string[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
   const [followPrefs, setFollowPrefs] = useState<Record<string, FollowPrefs>>({})
-  const [buyerProfile, setBuyerProfile] = useState<{ tone: number; avatar?: string; nameChangedAt?: string }>({ tone: 0 })
+  const [buyerProfile, setBuyerProfile] = useState<{ tone: number; avatar?: string; nameChangedAt?: string; nicknameInitialized: boolean; canRename: boolean; nextRenameAt: string | null }>({ tone: 0, nicknameInitialized: false, canRename: true, nextRenameAt: null })
+  const [publicNickname, setPublicNickname] = useState('')
+  const [myReviews, setMyReviews] = useState<{ id: string; productName: string; rating: number; body: string; createdAt: string }[]>([])
+  const [followCounts, setFollowCounts] = useState<Record<string, number>>({})
+  const [activeStorefront, setActiveStorefront] = useState<StorefrontSettings | null>(null)
+  const [similarProductId, setSimilarProductId] = useState<string | null>(null)
+  const verifiedSoldRef = useRef<Record<string, number>>({})
   const [tickets, setTickets] = useState<SupportTicket[]>([])
   const [welcomeOpen, setWelcomeOpen] = useState(true)
   const [termsOpen, setTermsOpen] = useState(false)
   const [forgotOpen, setForgotOpen] = useState(false)
+  const [recoveryOpen, setRecoveryOpen] = useState(false)
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') setRecoveryOpen(true)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+  const [announcements, setAnnouncements] = useState<PublicAnnouncement[]>([])
+  useEffect(() => {
+    let cancelled = false
+    void supabase.rpc('list_enabled_announcements').then(({ data, error }) => {
+      if (cancelled || error || !Array.isArray(data)) return
+      setAnnouncements(
+        data
+          .map((row) => ({ id: String((row as { id?: string }).id ?? ''), body: String((row as { body?: string }).body ?? '') }))
+          .filter((row) => row.id && row.body && !/[<>]/.test(row.body)),
+      )
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [role])
   const [tourRole, setTourRole] = useState<'buyer' | 'seller' | null>(null)
   const [toursSeen, setToursSeen] = useState<string[]>([])
 
-  const [productId, setProductId] = useState<string | null>(null)
-  const [storeId, setStoreId] = useState<string | null>(null)
-  const [chatId, setChatId] = useState<string | null>(null)
+  const [productId, setProductIdState] = useState<string | null>(initialNav.product)
+  const [storeId, setStoreIdState] = useState<string | null>(initialNav.store)
+  const [draftPreview, setDraftPreview] = useState<StorefrontSettings | null>(null)
+  const [sellerTab, setSellerTabState] = useState<SellerTab | null>(initialNav.tab)
+  const [chatTarget, setChatTarget] = useState<{ sellerUserId: string; sellerName: string; product?: ChatProductPreview | null } | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
   const [authInitialTab, setAuthInitialTab] = useState<'buyer' | 'seller'>('buyer')
   const [gateOpen, setGateOpen] = useState(false)
@@ -8685,14 +9025,14 @@ export default function OpenMarketplace() {
   const [adminLoginOpen, setAdminLoginOpen] = useState(false)
   const [adminFailed, setAdminFailed] = useState(0)
   const [cartOpen, setCartOpen] = useState(false)
-  const [centerOpen, setCenterOpen] = useState(false)
+  const [centerOpen, setCenterOpenState] = useState(initialNav.center)
   const [smsPrefs, setSmsPrefs] = useState<Record<string, SmsPrefs>>({})
   const [smsLog, setSmsLog] = useState<SmsMessage[]>([])
   const [notices, setNotices] = useState<SellerNotice[]>([])
   const [appeals, setAppeals] = useState<Appeal[]>([])
-  const [coupons, setCoupons] = useState<Coupon[]>(SEED_COUPONS)
+  const [coupons, setCoupons] = useState<Coupon[]>([])
   const [points, setPoints] = useState(120)
-  const [ledger, setLedger] = useState<LedgerEntry[]>(SEED_LEDGER)
+  const [ledger, setLedger] = useState<LedgerEntry[]>([])
   const [ownedPerks, setOwnedPerks] = useState<string[]>([])
   const [equippedPerks, setEquippedPerks] = useState<EquippedPerks>({})
   const [clockSkew, setClockSkew] = useState(0)
@@ -8713,7 +9053,7 @@ export default function OpenMarketplace() {
   const [scratchShareOpen, setScratchShareOpen] = useState(false)
   const [scratchCard, setScratchCard] = useState<ScratchCard | null>(null)
   const settledCardId = useRef<string | null>(null)
-  const [wallet, setWallet] = useState<WalletEntry[]>(SEED_WALLET)
+  const [wallet, setWallet] = useState<WalletEntry[]>([])
   const ownedCodes = useMemo(() => wallet.map((w) => w.code), [wallet])
   const usableCodes = useMemo(() => wallet.filter((w) => walletStatus(w) === 'unused').map((w) => w.code), [wallet])
   const [scamReports, setScamReports] = useState<ScamReport[]>([])
@@ -8725,85 +9065,421 @@ export default function OpenMarketplace() {
   const [exportLog, setExportLog] = useState<ExportLog[]>([])
   const [payResult, setPayResult] = useState<PayResult | null>(null)
 
-  const [query, setQuery] = useState('')
-  const [category, setCategory] = useState<CategorySel>(NO_CATEGORY)
-  const [sort, setSort] = useState<'new' | 'hot' | 'low' | 'high'>('hot')
+  const [query, setQueryState] = useState(initialNav.q)
+  const [category, setCategoryState] = useState<CategorySel>({ family: initialNav.family, main: initialNav.main, sub: initialNav.sub })
+  const [sort, setSortState] = useState<'new' | 'hot' | 'low' | 'high'>(initialNav.sort)
+  const [quick, setQuickState] = useState<Exclude<QuickKey, 'trust' | 'checkin' | 'scratch'> | null>(initialNav.quick)
 
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const notify = useCallback((msg: string) => {
     setToast(msg)
     if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToast(null), 2600)
+    toastTimer.current = setTimeout(() => setToast(null), 8000)
   }, [])
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
 
+  navRef.current = {
+    ...navRef.current,
+    product: productId,
+    store: draftPreview ? navRef.current.store : storeId,
+    q: query,
+    family: category.family,
+    main: category.main,
+    sub: category.sub,
+    sort,
+    quick,
+    page,
+    view: role === 'seller' || (navRef.current.view === 'seller' && (!sellerStatusReady || sellerApproved)) ? (role === 'admin' ? 'buyer' : 'seller') : 'buyer',
+    center: centerOpen,
+    tab: role === 'seller' ? sellerTab : navRef.current.tab,
+    chat: navRef.current.chat,
+  }
+
+  const patchNav = useCallback((partial: Partial<MarketplaceNav>, history: 'push' | 'replace') => {
+    const next = { ...navRef.current, ...partial }
+    if (next.view !== 'seller') next.tab = null
+    navRef.current = next
+    const href = marketplaceHref(pathname, next)
+    const current = `${window.location.pathname}${window.location.search}`
+    if (href === current) return
+    urlWriteRef.current = true
+    if (history === 'push') router.push(href, { scroll: false })
+    else router.replace(href, { scroll: false })
+  }, [pathname, router])
+
+  clearPrivateNavRef.current = () => patchNav({ view: 'buyer', tab: null, chat: null, center: false }, 'replace')
+
+  const setProductId = useCallback((value: string | null | ((current: string | null) => string | null)) => {
+    const next = typeof value === 'function' ? value(navRef.current.product) : value
+    setProductIdState(next)
+    patchNav({ product: next }, 'push')
+  }, [patchNav])
+  const setStoreId = useCallback((value: string | null | ((current: string | null) => string | null)) => {
+    const next = typeof value === 'function' ? value(navRef.current.store) : value
+    setDraftPreview(null)
+    setStoreIdState(next)
+    patchNav({ store: next }, 'push')
+  }, [patchNav])
+  const setPage = useCallback((value: 'market' | 'rewards') => {
+    setPageState(value)
+    patchNav({ page: value }, 'push')
+  }, [patchNav])
+  const setCenterOpen = useCallback((value: boolean) => {
+    setCenterOpenState(value)
+    patchNav({ center: value }, 'push')
+  }, [patchNav])
+  const setRole = useCallback((value: Role) => {
+    setRoleState(value)
+    if (value === 'admin') return
+    patchNav({ view: value === 'seller' ? 'seller' : 'buyer', tab: value === 'seller' ? sellerTab : null }, 'push')
+  }, [patchNav, sellerTab])
+  const setSellerTab = useCallback((value: SellerTab) => {
+    setSellerTabState(value)
+    patchNav({ view: 'seller', tab: value }, 'push')
+  }, [patchNav])
+  const queryTimer = useRef<number | null>(null)
+  const setQuery = useCallback((value: string) => {
+    setQueryState(value)
+    if (queryTimer.current) window.clearTimeout(queryTimer.current)
+    queryTimer.current = window.setTimeout(() => patchNav({ q: value }, 'replace'), 350)
+  }, [patchNav])
+  const setCategory = useCallback((value: CategorySel) => {
+    setCategoryState(value)
+    patchNav({ family: value.family, main: value.main, sub: value.sub }, 'replace')
+  }, [patchNav])
+  const setSort = useCallback((value: 'new' | 'hot' | 'low' | 'high') => {
+    setSortState(value)
+    patchNav({ sort: value }, 'replace')
+  }, [patchNav])
+  const setQuick = useCallback((value: Exclude<QuickKey, 'trust' | 'checkin' | 'scratch'> | null | ((current: Exclude<QuickKey, 'trust' | 'checkin' | 'scratch'> | null) => Exclude<QuickKey, 'trust' | 'checkin' | 'scratch'> | null)) => {
+    const next = typeof value === 'function' ? value(navRef.current.quick) : value
+    setQuickState(next)
+    patchNav({ quick: next }, 'replace')
+  }, [patchNav])
+  const rememberChat = useCallback((chatId: string | null) => {
+    patchNav({ chat: chatId }, 'replace')
+  }, [patchNav])
+
+  useEffect(() => {
+    const next = readMarketplaceNav(searchParams)
+    if (urlWriteRef.current) {
+      if (sameNav(next, navRef.current)) urlWriteRef.current = false
+      return
+    }
+    if (sameNav(next, navRef.current)) return
+    navRef.current = next
+    setProductIdState(next.product)
+    setStoreIdState(next.store)
+    setQueryState(next.q)
+    setCategoryState({ family: next.family, main: next.main, sub: next.sub })
+    setSortState(next.sort)
+    setQuickState(next.quick)
+    setPageState(next.page)
+    setCenterOpenState(next.center)
+    setSellerTabState(next.tab)
+    setDraftPreview(null)
+    if (next.view === 'buyer' && role !== 'admin') setRoleState('buyer')
+    if (next.view === 'seller' && sellerApproved) setRoleState('seller')
+  }, [searchParams, role, sellerApproved])
+
+  useEffect(() => {
+    if (!authResolved || !sellerStatusReady) return
+    if (readMarketplaceNav(searchParams).view !== 'seller') return
+    if (sellerApproved) {
+      setRoleState('seller')
+      return
+    }
+    setRoleState('buyer')
+    patchNav({ view: 'buyer', tab: null }, 'replace')
+  }, [authResolved, sellerStatusReady, sellerApproved, patchNav, searchParams])
+
+  const [cartHydrated, setCartHydrated] = useState(false)
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('hj-cart')
+      const parsed = raw ? JSON.parse(raw) as unknown : []
+      if (Array.isArray(parsed)) {
+        setCart(parsed.flatMap((item) => {
+          if (!item || typeof item !== 'object') return []
+          const line = item as CartLine
+          if (typeof line.key !== 'string' || typeof line.productId !== 'string' || typeof line.qty !== 'number' || line.qty < 1) return []
+          if (!line.variant || typeof line.variant !== 'object') return []
+          return [line]
+        }))
+      }
+    } catch {
+      /* ignore broken cart cache */
+    }
+    setCartHydrated(true)
+  }, [])
+  useEffect(() => {
+    if (!cartHydrated) return
+    sessionStorage.setItem('hj-cart', JSON.stringify(cart))
+  }, [cart, cartHydrated])
+
+  useEffect(() => {
+    if (!authResolved || role === 'seller') return
+    const chatId = navRef.current.chat
+    if (!authUserId || !chatId) return
+    setChatTarget((current) => (current?.sellerUserId ? current : { sellerUserId: '', sellerName: '對話', product: null }))
+  }, [authResolved, authUserId, role, searchParams])
+
+  useEffect(() => {
+    const saveScroll = () => {
+      if (!navRef.current.product && !navRef.current.store && !navRef.current.center) {
+        sessionStorage.setItem('hj-market-scroll', String(window.scrollY))
+      }
+    }
+    window.addEventListener('scroll', saveScroll, { passive: true })
+    return () => window.removeEventListener('scroll', saveScroll)
+  }, [])
+  useEffect(() => {
+    if (productId || storeId || centerOpen || draftPreview) return
+    const y = Number(sessionStorage.getItem('hj-market-scroll') || '0')
+    if (y > 0) window.scrollTo(0, y)
+  }, [productId, storeId, centerOpen, draftPreview])
+
   const sellerById = useMemo(() => new Map(sellers.map((s) => [s.id, s])), [sellers])
+  const sellerForProduct = useCallback((sellerId: string) => {
+    const known = sellerById.get(sellerId)
+    if (known) return known
+    if (authUserId && sellerId === authUserId && ownedSellerId) {
+      const mine = sellerById.get(ownedSellerId)
+      if (mine) return mine
+    }
+    return catalogSeller(sellerId || 'legacy')
+  }, [sellerById, authUserId, ownedSellerId])
   const checkinSellerIds = useMemo(
     () => new Set(coupons.filter((c) => c.listed && c.active && inWindow(c, todayStr())).map((c) => c.sellerId)),
     [coupons],
   )
-  const mySeller = sellerById.get(mySellerId) ?? sellers[0]
+  const mySeller = ownedSellerId ? sellerById.get(ownedSellerId) : undefined
 
-  const [quick, setQuick] = useState<Exclude<QuickKey, 'trust' | 'checkin' | 'scratch'> | null>(null)
   const [trustOpen, setTrustOpen] = useState(false)
 
+  const loadProducts = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.from('products').select('*')
+      if (error || !Array.isArray(data)) {
+        if (error) console.error('讀取商品失敗：', error)
+        return
+      }
+      setProducts(data.map((row) => mapProductRow(row as ProductRow)).filter((p): p is Product => p != null).map((product) => ({ ...product, verifiedSold: verifiedSoldRef.current[product.id] ?? 0 })))
+    } catch (err) {
+      console.error('讀取商品失敗：', err)
+    } finally {
+      setProductsLoaded(true)
+    }
+  }, [])
+
   useEffect(() => {
+    void loadProducts()
+  }, [loadProducts, authUserId])
+
+  useEffect(() => {
+    if (!authUserId) {
+      if (authResolved) setSellerStatusReady(true)
+      return
+    }
     let cancelled = false
-    const loadProducts = async () => {
+    setSellerStatusReady(false)
+    const loadOwnApplication = async () => {
       try {
-        const { data, error } = await supabase.from('products').select('*')
+        const { data, error } = await supabase
+          .from('seller_applications')
+          .select('id, user_id, store_name, legal_name, status, created_at, review_note, kyc_document_path')
+          .eq('user_id', authUserId)
+          .order('created_at', { ascending: false })
+          .limit(1)
         if (cancelled) return
-        if (error || !Array.isArray(data)) {
-          setProducts([])
+        if (error) {
+          console.error('讀取賣家資格失敗：', error)
+          setSellerApproved(false)
+          setSellerAccess(false)
           return
         }
-        setProducts(data.map((row) => mapProductRow(row as ProductRow)).filter((p): p is Product => p != null))
-      } catch {
-        if (!cancelled) setProducts([])
+        const row = data?.[0]
+        if (!row) {
+          setOwnedSellerId(null)
+          setSellerApproved(false)
+          setSellerAccess(false)
+          return
+        }
+        const seller = mapSellerApplication(row as SellerApplicationRow)
+        setSellers((list) => [seller, ...list.filter((item) => item.id !== seller.id)])
+        setOwnedSellerId(seller.id)
+        setMySellerId(seller.id)
+        const approved = row.status === 'approved'
+        setSellerApproved(approved)
+        setSellerAccess(approved)
+      } finally {
+        if (!cancelled) setSellerStatusReady(true)
       }
     }
-    void loadProducts()
+    void loadOwnApplication()
     return () => {
       cancelled = true
     }
+  }, [authUserId, authResolved])
+
+  const applyReviews = useCallback((rows: PublicReview[]) => {
+    const grouped = new Map<string, Review[]>()
+    rows.forEach((row) => {
+      const review: Review = {
+        id: row.id,
+        user: row.nickname,
+        rating: row.rating,
+        text: row.body,
+        date: row.createdAt.slice(0, 10),
+        reply: row.reply ? { text: row.reply, at: row.repliedAt ?? '' } : undefined,
+        photos: row.photos,
+      }
+      grouped.set(row.productId, [...(grouped.get(row.productId) ?? []), review])
+    })
+    setProducts((current) => current.map((product) => ({ ...product, reviews: grouped.get(product.id) ?? [] })))
   }, [])
+
+  useEffect(() => {
+    if (!authUserId) {
+      setFavorites([])
+      setFollowed([])
+      setTickets([])
+      setPublicNickname('')
+      setMyReviews([])
+      setBuyerProfile({ tone: 0, nicknameInitialized: false, canRename: true, nextRenameAt: null })
+      return
+    }
+    let cancelled = false
+    const loadAccount = async () => {
+      const [profile, favoriteResult, followResult, ticketResult, reviews] = await Promise.all([
+        fetchMyProfile(),
+        listFavoriteIds(),
+        listFollowedSellerIds(),
+        adminAuthed ? fetchAdminTickets() : fetchMyTickets(account?.name || '會員'),
+        fetchMyReviews(),
+      ])
+      if (cancelled) return
+      if (profile.error) notify(profile.error)
+      if (favoriteResult.error) notify(favoriteResult.error)
+      if (followResult.error) notify(followResult.error)
+      if (ticketResult.error) notify(ticketResult.error)
+      if (profile.profile) {
+        setPublicNickname(profile.profile.publicNickname)
+        setBuyerProfile({
+          tone: profile.profile.avatarTone,
+          avatar: profile.profile.avatarUrl ?? undefined,
+          nameChangedAt: profile.profile.nicknameChangedAt ?? undefined,
+          nicknameInitialized: profile.profile.nicknameInitialized,
+          canRename: profile.profile.canRename,
+          nextRenameAt: profile.profile.nextRenameAt,
+        })
+      }
+      setFavorites(favoriteResult.ids)
+      setFollowed(followResult.ids)
+      setTickets(ticketResult.tickets.map(toSupportTicket))
+      setMyReviews(reviews)
+    }
+    void loadAccount()
+    return () => {
+      cancelled = true
+    }
+  }, [authUserId, adminAuthed])
+
+  useEffect(() => {
+    const ids = products.map((product) => product.id).filter(isProductUuid)
+    if (!ids.length) return
+    let cancelled = false
+    void fetchVerifiedSales(ids).then((sales) => {
+      if (cancelled) return
+      verifiedSoldRef.current = { ...verifiedSoldRef.current, ...sales }
+      setProducts((current) => current.map((product) => ({ ...product, verifiedSold: verifiedSoldRef.current[product.id] ?? 0 })))
+    })
+    void fetchPublicReviews(ids).then((rows) => {
+      if (!cancelled) applyReviews(rows)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [products.map((product) => product.id).join('|'), applyReviews])
+
+  useEffect(() => {
+    const ids = [...new Set(products.map((product) => product.sellerId).filter(isProductUuid))]
+    if (!ids.length) return
+    let cancelled = false
+    void fetchPublicStoreNames(ids).then((names) => {
+      if (cancelled || !Object.keys(names).length) return
+      setSellers((list) => {
+        const next = [...list]
+        Object.entries(names).forEach(([userId, info]) => {
+          const index = next.findIndex((seller) => seller.userId === userId || seller.id === userId)
+          if (index >= 0) {
+            const current = next[index]
+            const renamed = !current.userId || current.name === '賣場'
+            next[index] = { ...current, ...(renamed ? { userId, name: info.name } : {}), certifiedAt: info.certifiedAt }
+            return
+          }
+          next.push({ ...catalogSeller(userId), userId, name: info.name, certifiedAt: info.certifiedAt })
+        })
+        return next
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [products.map((product) => product.sellerId).join('|')])
+
+  const openStoreSeller = sellers.find((seller) => seller.id === storeId) ?? sellers.find((seller) => seller.userId === storeId)
+  const openStoreUserId = openStoreSeller?.userId || (storeId && isProductUuid(storeId) ? storeId : '')
+  useEffect(() => {
+    if (!openStoreUserId) {
+      setActiveStorefront(null)
+      return
+    }
+    let cancelled = false
+    void fetchPublicStorefront(openStoreUserId).then((row) => {
+      if (cancelled) return
+      setActiveStorefront(row)
+      if (!row?.certifiedAt) return
+      setSellers((list) => list.map((seller) => (
+        seller.userId === openStoreUserId || seller.id === openStoreUserId
+          ? { ...seller, certifiedAt: row.certifiedAt }
+          : seller
+      )))
+    })
+    void fetchFollowCounts([openStoreUserId]).then((counts) => {
+      if (!cancelled) setFollowCounts((current) => ({ ...current, ...counts }))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [openStoreUserId])
 
   const listedProducts = useMemo(
     () =>
       products.filter((p) => {
-        if (!p.active || p.flagged || p.reviewHold) return false
-        const seller = sellerById.get(p.sellerId)
-        if (!seller) return true
-        return seller.verify === 'approved' && !isOffline(seller)
+        if (!p.active || p.draft || p.flagged || priceReviewBlocksPublic(p)) return false
+        const known = sellerById.get(p.sellerId) ?? (authUserId && p.sellerId === authUserId && ownedSellerId ? sellerById.get(ownedSellerId) : undefined)
+        if (!known) return true
+        return known.verify === 'approved' && !isOffline(known)
       }),
-    [products, sellerById],
+    [products, sellerById, authUserId, ownedSellerId],
   )
 
   const visibleProducts = useMemo(() => {
     const q = query.trim().toLowerCase()
     const list = listedProducts.filter((p) => {
-      const s = sellerById.get(p.sellerId)
+      const s = sellerForProduct(p.sellerId)
       if (quick === 'freeShip' && p.price < FREE_SHIP) return false
       if (quick === 'founder' && !(s && isFounder(s))) return false
       return matchCategory(p, category) && (!q || p.name.toLowerCase().includes(q) || (s?.name ?? '').toLowerCase().includes(q))
     })
     const mode = quick === 'hot' || quick === 'new' ? quick : sort
-    if (mode === 'hot') list.sort((a, b) => (quick === 'hot' ? b.sold + b.reviews.length * 3 - (a.sold + a.reviews.length * 3) : b.sold - a.sold))
+    if (mode === 'hot') list.sort((a, b) => (b.verifiedSold ?? 0) - (a.verifiedSold ?? 0))
     if (mode === 'low') list.sort((a, b) => a.price - b.price)
     if (mode === 'high') list.sort((a, b) => b.price - a.price)
     return list
-  }, [listedProducts, sellerById, query, category, sort, quick])
-
-  const flashItems = useMemo(
-    () =>
-      [...listedProducts]
-        .filter((p) => p.stock > 0 && p.sold > 0)
-        .sort((a, b) => b.sold - a.sold)
-        .slice(0, 10)
-        .map((p) => ({ id: p.id, name: p.name, price: p.price, image: p.image, sold: p.sold, stock: p.stock, sellerName: sellerById.get(p.sellerId)?.name ?? '' })),
-    [listedProducts, sellerById],
-  )
+  }, [listedProducts, sellerForProduct, query, category, sort, quick])
 
   const onQuick = (key: QuickKey) => {
     if (key === 'trust') return setTrustOpen(true)
@@ -8818,13 +9494,39 @@ export default function OpenMarketplace() {
     setQuery('')
     requestAnimationFrame(() => document.getElementById('market-products')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   }
-  const quickLabel = { freeShip: '全站免運專區', hot: '熱銷發燒榜', founder: '創始特約店', new: '新上架商品' } as const
+  const quickLabel = { freeShip: '較高單價', hot: '有成交紀錄', founder: '創始特約店', new: '新上架商品' } as const
 
   const cartCount = cart.reduce((s, l) => s + l.qty, 0)
-  const approvedCount = sellers.filter((s) => s.verify === 'approved' && !isOffline(s)).length
+  const approvedCount = new Set(sellers.filter((s) => s.verify === 'approved' && !isOffline(s)).map((s) => s.userId || s.id)).size
+  const newestProducts = useMemo(
+    () => [...listedProducts].sort((a, b) => (b.listedAt || '').localeCompare(a.listedAt || '') || b.id.localeCompare(a.id)).slice(0, 8),
+    [listedProducts],
+  )
+  const heroPhotos = useMemo(
+    () => listedProducts.map((product) => product.image).filter((src) => !!src && !src.includes('placeholder')).slice(0, 3),
+    [listedProducts],
+  )
+  const exploreStores = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; count: number }>()
+    listedProducts.forEach((product) => {
+      const seller = sellerForProduct(product.sellerId)
+      const id = seller.userId || seller.id
+      if (!id || !seller.name || seller.name === '賣場') return
+      const current = map.get(id) ?? { id, name: seller.name, count: 0 }
+      current.count += 1
+      map.set(id, current)
+    })
+    return [...map.values()].slice(0, 8)
+  }, [listedProducts, sellerForProduct])
 
   /* 角色與帳號 */
   const switchRole = (r: Role, force = false) => {
+    
+    if (r === 'buyer' && !account) {
+      setAuthOpen(true)
+      return
+    }
+
     if (r === 'seller' && role !== 'seller' && !sellerAccess && !force) {
       setGateOpen(true)
       return
@@ -8838,10 +9540,9 @@ export default function OpenMarketplace() {
       notify('此賣家帳號已被平台永久封鎖，禁止登入')
       return
     }
-    setRole(r)
-    setPage('market')
-    if (!account) setAccount({ name: r === 'buyer' ? '測試買家' : r === 'seller' ? '測試賣家' : '平台管理員' })
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+setRole(r)
+setPage('market')
+window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const logoClicks = useRef({ count: 0, last: 0 })
@@ -8854,6 +9555,10 @@ export default function OpenMarketplace() {
       state.count = 0
       if (!adminAuthed) setAdminLoginOpen(true)
       return
+    }
+    if (draftPreview || storeId) {
+      setStoreId(null)
+      if (role !== 'buyer') return
     }
     if (role === 'buyer') {
       setPage('market')
@@ -8868,7 +9573,7 @@ export default function OpenMarketplace() {
     const product = products.find((p) => p.id === pid)
     if (!product) return false
     const owner = sellerById.get(product.sellerId)
-    if (product.flagged || product.reviewHold || (owner && isOffline(owner))) {
+    if (product.flagged || priceReviewBlocksPublic(product) || (owner && isOffline(owner))) {
       notify(owner && isOffline(owner) ? '該店鋪正在進行系統維護或結帳升級中，暫時無法下單' : '此商品目前無法購買')
       return false
     }
@@ -8896,44 +9601,98 @@ export default function OpenMarketplace() {
     setCart((c) => c.flatMap((l) => (l.key === key ? (l.qty + delta <= 0 ? [] : [{ ...l, qty: l.qty + delta }]) : [l])))
   const removeLine = (key: string) => setCart((c) => c.filter((l) => l.key !== key))
 
-  const toggleFav = (id: string) => {
-    if (!account) {
+  const toggleFav = async (id: string) => {
+    if (!account || !authUserId) {
       notify('請先登入或註冊買家帳號')
       setAuthOpen(true)
       return
     }
+    if (!isProductUuid(id)) {
+      notify('這個商品還沒有正式編號，不能收藏')
+      return
+    }
     const has = favorites.includes(id)
-    setFavorites((f) => (has ? f.filter((x) => x !== id) : [...f, id]))
+    const error = has ? await removeFavorite(id) : await addFavorite(id)
+    if (error) {
+      notify(error)
+      return
+    }
+    setFavorites((current) => (has ? current.filter((item) => item !== id) : [...current, id]))
     notify(has ? '已取消收藏' : '已加入收藏')
   }
-  const renameBuyer = (next: string) => {
-    const prev = account?.name
-    if (!prev) return
-    setAccount({ name: next })
-    setOrders((l) => l.map((o) => (o.owner === prev ? { ...o, owner: next, buyer: next } : o)))
-    setBuyerProfile((p) => ({ ...p, nameChangedAt: new Date().toISOString() }))
-    notify('名稱已更新，90 天內無法再次修改')
+  const renameBuyer = async (next: string) => {
+    const result = await savePublicNickname(next)
+    if (result.error || !result.profile) return result.error || '暱稱更新失敗'
+    setPublicNickname(result.profile.publicNickname)
+    setBuyerProfile((current) => ({
+      ...current,
+      nameChangedAt: result.profile?.nicknameChangedAt ?? undefined,
+      nicknameInitialized: true,
+      canRename: result.profile?.canRename ?? false,
+      nextRenameAt: result.profile?.nextRenameAt ?? null,
+    }))
+    notify('公開暱稱已更新')
+    return ''
+  }
+  const uploadAvatar = async (dataUrl: string) => {
+    const result = await uploadMemberAvatar(dataUrl, buyerProfile.avatar)
+    if (result.error || !result.url) return result.error || '頭像上傳失敗'
+    setBuyerProfile((current) => ({ ...current, avatar: result.url ?? undefined }))
+    notify('大頭貼已更新')
+    return ''
+  }
+  const removeAvatar = async () => {
+    const error = await removeMemberAvatar(buyerProfile.avatar)
+    if (error) return error
+    setBuyerProfile((current) => ({ ...current, avatar: undefined }))
+    notify('已移除大頭貼')
+    return ''
+  }
+  const changeAvatarTone = async (tone: number) => {
+    const error = await saveAvatarTone(tone)
+    if (error) {
+      notify(error)
+      return
+    }
+    setBuyerProfile((current) => ({ ...current, tone }))
   }
   const stampNow = () => {
     const d = new Date()
     return `${todayStr().replace(/-/g, '/')} ${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
-  const submitTicket = (who: 'buyer' | 'seller', t: { category: string; subject: string; body: string }) => {
-    const tk: SupportTicket = {
-      id: `T${Date.now()}`,
-      role: who,
-      author: who === 'seller' ? (mySeller?.name ?? '賣家') : (account?.name ?? '買家'),
-      ...t,
-      at: stampNow(),
-      status: 'open',
+  const submitTicket = async (who: 'buyer' | 'seller', t: { category: string; subject: string; body: string }) => {
+    if (!authUserId) {
+      notify('請先登入後再送出客服工單')
+      return
     }
-    setTickets((l) => [tk, ...l])
-    notify('已送出，客服回覆時會通知您')
+    const error = await createSupportTicket({ role: who, ...t })
+    if (error) {
+      notify(error)
+      return
+    }
+    const refreshed = await fetchMyTickets(publicNickname || account?.name || '會員')
+    if (refreshed.error) notify(refreshed.error)
+    else setTickets(refreshed.tickets.map(toSupportTicket))
+    notify('客服工單已送出')
   }
-  const readTicket = (id: string) => setTickets((l) => l.map((t) => (t.id === id ? { ...t, unread: false } : t)))
-  const replyTicket = (id: string, text: string) => {
-    setTickets((l) => l.map((t) => (t.id === id ? { ...t, status: 'replied', reply: text, repliedAt: stampNow(), unread: true } : t)))
-    notify('已回覆，使用者會收到通知')
+  const readTicket = async (id: string) => {
+    const error = await markTicketRead(id)
+    if (error) {
+      notify(error)
+      return
+    }
+    setTickets((current) => current.map((ticket) => (ticket.id === id ? { ...ticket, unread: false } : ticket)))
+  }
+  const replyTicket = async (id: string, text: string, status: SupportTicket['status']) => {
+    const error = await adminUpdateTicket(id, status, text)
+    if (error) {
+      notify(error)
+      return
+    }
+    const refreshed = await fetchAdminTickets()
+    if (refreshed.error) notify(refreshed.error)
+    else setTickets(refreshed.tickets.map(toSupportTicket))
+    notify('客服工單已更新')
   }
   const setCancelAtPeriodEnd = (id: string, cancel: boolean) => {
     setSellers((l) => l.map((x) => (x.id === id ? { ...x, plan: { ...x.plan, cancelAtPeriodEnd: cancel } } : x)))
@@ -8956,6 +9715,9 @@ export default function OpenMarketplace() {
   }
 
   const checkout = (p: CheckoutPayload): Order[] => {
+    void p
+    notify('金流尚未啟用，不會建立訂單，也不會標記為已付款。')
+    return []
     const groups = new Map<string, CartLine[]>()
     cart.forEach((l) => {
       const prod = products.find((x) => x.id === l.productId)
@@ -9046,7 +9808,7 @@ export default function OpenMarketplace() {
               }),
             )
         }
-        return { ...pr, stock: Math.max(0, pr.stock - qty), sold: pr.sold + qty, optionStock, comboStock }
+        return { ...pr, stock: Math.max(0, pr.stock - qty), optionStock, comboStock }
       }),
     )
     if (usedCouponId) {
@@ -9071,28 +9833,157 @@ export default function OpenMarketplace() {
   }
 
   /* 認證 / 註冊 */
-  const registerBuyer = (name: string) => {
-    setAccount({ name })
-    setRole('buyer')
-    setAuthOpen(false)
-    notify(`歡迎加入買個 Pay 服，${name}！`)
+ 
+const registerBuyer = async (name: string, email: string, password: string) => {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: { name },
+    },
+  })
+
+  if (error) {
+    notify(signupErrorZh(error))
+    return
   }
-  const login = (name: string) => {
-    if (sellers.some((s) => s.suspended && (s.owner === name || s.name === name))) {
-      notify('此帳號已被平台永久封鎖，禁止登入')
+
+  if (!data.user) {
+    notify('註冊失敗，請稍後再試')
+    return
+  }
+
+  
+if (!data.session) {
+  setAuthOpen(false)
+  notify('註冊成功！請先到 Email 收取驗證信，完成驗證後再登入。')
+  return
+}
+
+setAuthOpen(false)
+
+
+  setAccount({ name })
+  setRole('buyer')
+  notify(`歡迎加入買個 Pay 服，${name}！`)
+}
+const login = async (email: string, password: string) => {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  })
+
+  if (error || !data.user) {
+    notify('登入失敗，請確認 Email、密碼及信箱驗證狀態')
+    return
+  }
+
+  const name = data.user.user_metadata?.name || email.split('@')[0]
+
+  setAuthUserId(data.user.id)
+  setAccount({ name })
+  setRole('buyer')
+  setAuthOpen(false)
+  notify(`歡迎回來，${name}`)
+}
+const registerSeller = async (d: SellerRegisterData) => {
+    if (!account) {
+      notify('請先登入會員，再申請成為賣家')
+      setAuthOpen(false)
+      setAuthInitialTab('buyer')
+      setAuthOpen(true)
       return
     }
-    if (sellers.some((s) => s.owner === name || s.name === name)) setSellerAccess(true)
-    setAccount({ name })
-    setAuthOpen(false)
-    notify(`歡迎回來，${name}`)
-  }
-  const registerSeller = (d: SellerRegisterData) => {
     if (blacklist.some((b) => b.idNo === d.idNo)) {
       notify('此身分證 / 統編已列入全站黑名單，無法註冊賣場')
       return
     }
-    const id = `s${Date.now()}`
+    const { data: authData, error: authError } =
+  await supabase.auth.getUser()
+
+if (authError || !authData.user) {
+  notify('登入狀態已失效，請重新登入後再申請')
+  return
+  
+}
+if (!d.docFile) {
+  notify('請先選擇要上傳的身分證明文件')
+  return
+}
+
+const allowedDocTypes = [
+  'image/jpeg',
+  'image/png',
+  'application/pdf',
+]
+
+if (!allowedDocTypes.includes(d.docFile.type)) {
+  notify('證件只接受 JPG、PNG 或 PDF 格式')
+  return
+}
+
+if (d.docFile.size === 0 || d.docFile.size > 10 * 1024 * 1024) {
+  notify('證件檔案不可為空白，且大小不得超過 10 MB')
+  return
+}
+const docFile = d.docFile!
+
+const extension =
+  docFile.type === 'application/pdf'
+    ? 'pdf'
+    : docFile.type === 'image/png'
+      ? 'png'
+      : 'jpg'
+
+const kycDocumentPath =
+  `${authData.user.id}/${crypto.randomUUID()}.${extension}`
+
+const { error: uploadError } = await supabase.storage
+  .from('seller-kyc')
+  .upload(kycDocumentPath, docFile, {
+    contentType: docFile.type,
+    upsert: false,
+  })
+
+if (uploadError) {
+  console.error('證件上傳失敗：', uploadError)
+  notify('證件上傳失敗，申請尚未送出，請稍後重試')
+  return
+}
+const { data: application, error: applicationError } = await supabase
+  .from('seller_applications')
+  .insert({
+    user_id: authData.user.id,
+    seller_type: 'individual',
+    store_name: d.storeName,
+    legal_name: d.owner,
+    business_tax_id: null,
+    kyc_document_path: kycDocumentPath,
+  })
+  .select('id')
+  .single()
+
+  if (applicationError) {
+    console.error('賣家申請失敗：', applicationError)
+  
+    const { error: cleanupError } = await supabase.storage
+      .from('seller-kyc')
+      .remove([kycDocumentPath])
+  
+    if (cleanupError) {
+      console.error('證件檔案清理失敗：', cleanupError)
+    }
+  
+    notify('申請送出失敗，請稍後再試')
+    return
+  }
+  if (!application?.id) {
+    console.error('賣家申請狀態不明：未取得申請編號')
+    notify('申請狀態無法確認，請聯絡平台管理員，暫時不要重複送出')
+    return
+  }
+
+const id = application.id
     const colors = ['bg-primary text-primary-foreground', 'bg-foreground text-card', 'bg-emerald-700 text-card', 'bg-amber-600 text-card']
     const next: Seller = {
       id,
@@ -9114,60 +10005,280 @@ export default function OpenMarketplace() {
         sellers.filter((x) => x.founderNo).length < FOUNDER_LIMIT
           ? Math.max(0, ...sellers.map((x) => x.founderNo ?? 0)) + 1
           : undefined,
-      plan: { status: 'trial', periodStart: todayStr(), nextDate: addMonth(todayStr()), method: 'card', autoPay: false, trialLeft: 30 },
-    }
-    setSellers((s) => [...s, next])
-    setMySellerId(id)
-    setAccount({ name: d.owner })
-    setRole('seller')
-    setSellerAccess(true)
-    setAuthOpen(false)
-    notify('實名資料已送出，狀態：待平台審核')
+      plan: { status: 'unbilled', periodStart: '', nextDate: '', method: 'card', autoPay: false, billingLinked: false },
+    } 
+setSellers((s) => [...s, next])
+setMySellerId(id)
+setRole('buyer')
+setSellerAccess(false)
+setAuthOpen(false)
+notify('實名申請已送出，請等待平台審核通過後再開通賣家功能')
+
   }
 
   /* 賣家後台動作 */
-  const saveProduct = (p: Product) => {
-    setProducts((list) => (list.some((x) => x.id === p.id) ? list.map((x) => (x.id === p.id ? p : x)) : [p, ...list]))
-    notify(p.draft ? '已存為草稿，請預覽確認後按「發佈商品」才會公開' : p.reviewHold ? `商品價格超過 ${money(REVIEW_PRICE_LIMIT)}，已送出審核，核准後才會公開` : '商品已儲存')
-  }
-  const importProducts = (ps: Product[]) => {
-    setProducts((list) => [...ps, ...list])
-    notify(`一鍵搬家完成，已匯入 ${ps.length} 件商品`)
-  }
-  const toggleProduct = (id: string) => {
-    if (products.find((p) => p.id === id)?.draft) {
-      notify('草稿尚未發佈，請先預覽確認後按「發佈商品」')
-      return
+  const canWriteProducts = () => {
+    if (!authUserId) {
+      notify('請先登入後再管理商品')
+      return false
     }
-    if (products.find((p) => p.id === id)?.flagged) {
-      notify('此商品因被檢舉已鎖定，需待平台審核完成')
-      return
+    if (!sellerApproved) {
+      notify('尚未通過賣家審核，商品沒有寫入')
+      return false
     }
-    setProducts((l) => l.map((p) => (p.id === id ? { ...p, active: !p.active } : p)))
+    return true
   }
-  const publishProduct = (id: string) => {
+  const applySavedProduct = (previousId: string, row: ProductRow) => {
+    const saved = mapProductRow(row)
+    if (!saved) {
+      notify('商品寫入後無法讀取回傳資料')
+      return null
+    }
+    saved.verifiedSold = verifiedSoldRef.current[saved.id] ?? 0
+    setProducts((list) => replaceProduct(list, previousId, saved))
+    return saved
+  }
+  const saveProduct = async (p: Product) => {
+    if (!canWriteProducts() || !authUserId) return null
+    const payload = toProductWrite(p)
+    const updating = isProductUuid(p.id)
+    const { data, error } = updating
+      ? await supabase.from('products').update(payload).eq('id', p.id).eq('seller_id', authUserId).select('*').maybeSingle()
+      : await supabase.from('products').insert({ ...payload, seller_id: authUserId }).select('*').maybeSingle()
+    if (error || !data) {
+      console.error('商品儲存失敗：', error)
+      notify(`商品儲存失敗：${error?.message ?? '沒有寫入資料'}`)
+      return null
+    }
+    const saved = applySavedProduct(p.id, data as ProductRow)
+    if (!saved) return null
+    notify(saved.draft
+      ? '已存為草稿，請預覽確認後按「發佈商品」才會公開'
+      : priceReviewRejected(saved)
+        ? '商品已儲存，仍是已退回、尚未公開。儲存不會自動重新送審，請按「重新送審」。'
+        : priceReviewBlocksPublic(saved)
+        ? `商品已儲存，目前尚未公開。最高售價超過 ${money(REVIEW_PRICE_LIMIT)} 或既有審核鎖定都要等管理員核准後才會公開`
+        : '商品已儲存')
+    return saved
+  }
+  const importProducts = async (ps: Product[]): Promise<ProductImportResult> => {
+    const empty: ProductImportResult = { saved: [], failed: [] }
+    if (!canWriteProducts() || !authUserId) {
+      return { saved: [], failed: ps.map((p) => ({ name: p.name || '未命名商品', message: '尚未通過賣家審核或未登入' })) }
+    }
+    if (ps.length === 0) {
+      notify('沒有可匯入的商品')
+      return empty
+    }
+    const saved: ProductImportResult['saved'] = []
+    const failed: ProductImportResult['failed'] = []
+    for (const p of ps) {
+      const payload = toProductWrite({ ...p, sellerId: authUserId, active: true, draft: false })
+      const { data, error } = await supabase.from('products').insert({ ...payload, seller_id: authUserId }).select('*').maybeSingle()
+      if (error || !data) {
+        console.error('商品匯入失敗：', error)
+        failed.push({ name: p.name || '未命名商品', message: error?.message ?? '沒有寫入資料' })
+        continue
+      }
+      const row = mapProductRow(data as ProductRow)
+      if (row) row.verifiedSold = verifiedSoldRef.current[row.id] ?? 0
+      if (!row || row.sellerId !== authUserId) {
+        failed.push({ name: p.name || '未命名商品', message: '資料庫沒有回傳這筆商品' })
+        continue
+      }
+      setProducts((list) => replaceProduct(list, p.id, row))
+      saved.push({ id: row.id, name: row.name, reviewHold: !!row.reviewHold || priceReviewBlocksPublic(row) })
+    }
+    if (saved.length === 0) {
+      notify(`匯入失敗，沒有商品寫入資料庫。${failed[0]?.message ?? ''}`)
+    } else if (failed.length > 0) {
+      notify(`已寫入 ${saved.length} 件，${failed.length} 件失敗，沒有全部成功`)
+    } else {
+      const heldCount = saved.filter((item) => item.reviewHold).length
+      notify(heldCount > 0
+        ? `已匯入 ${saved.length} 件。其中 ${heldCount} 件最高售價超過 ${money(REVIEW_PRICE_LIMIT)}，已送審，核准前不會公開`
+        : `一鍵搬家完成，已匯入 ${saved.length} 件商品`)
+    }
+    return { saved, failed }
+  }
+  const setProductActive = async (id: string, active: boolean) => {
+    const current = products.find((p) => p.id === id)
+    if (!current) return false
+    if (current.draft) {
+      notify('草稿尚未發佈，請先按「發佈商品」')
+      return false
+    }
+    if (active && current.flagged) {
+      notify('此商品因被檢舉已鎖定，不能直接重新上架')
+      return false
+    }
+    if (active && priceReviewRejected(current)) {
+      notify('此商品已退回，請先重新送審並等管理員核准後才能公開')
+      return false
+    }
+    if (active && priceReviewBlocksPublic(current)) {
+      notify('此商品仍待高價審核，核准前不能公開')
+      return false
+    }
+    if (current.active === active) {
+      notify(active ? '商品已經是上架狀態' : '商品已經是下架狀態')
+      return false
+    }
+    if (!canWriteProducts() || !authUserId) return false
+    if (!isProductUuid(id)) {
+      notify('此商品尚未寫入資料庫，無法上下架')
+      return false
+    }
+    const { data, error } = await supabase
+      .from('products')
+      .update({ active })
+      .eq('id', id)
+      .eq('seller_id', authUserId)
+      .select('*')
+      .maybeSingle()
+    if (error || !data) {
+      console.error('商品上下架失敗：', error)
+      notify(`上下架失敗：${error?.message ?? '沒有更新資料'}`)
+      return false
+    }
+    const saved = applySavedProduct(id, data as ProductRow)
+    if (!saved || saved.active !== active) {
+      notify('上下架失敗：資料庫沒有更新這筆商品')
+      return false
+    }
+    notify(saved.active
+      ? (priceReviewBlocksPublic(saved) ? '已設為上架，但仍未通過高價審核，核准前不會公開' : '商品已重新上架')
+      : '商品已下架，庫存與規格都保留')
+    return true
+  }
+  const publishProduct = async (id: string) => {
     const target = products.find((p) => p.id === id)
     if (!target) return
-    setProducts((l) => l.map((p) => (p.id === id ? { ...p, draft: false, active: true } : p)))
-    notify(target.reviewHold ? `商品價格超過 ${money(REVIEW_PRICE_LIMIT)}，已發佈並送出審核，核准後才會公開` : '商品已發佈上架，買家現在看得到了')
+    if (!canWriteProducts() || !authUserId) return
+    if (!isProductUuid(id)) {
+      notify('此商品尚未寫入資料庫，無法發佈')
+      return
+    }
+    const { data, error } = await supabase
+      .from('products')
+      .update({ draft: false, active: true })
+      .eq('id', id)
+      .eq('seller_id', authUserId)
+      .select('*')
+      .maybeSingle()
+    if (error || !data) {
+      console.error('商品發佈失敗：', error)
+      notify(`發佈失敗：${error?.message ?? '沒有更新資料'}`)
+      return
+    }
+    const saved = applySavedProduct(id, data as ProductRow)
+    if (!saved) return
+    notify(priceReviewBlocksPublic(saved) ? '商品已發佈，但仍未通過高價審核，管理員核准前不會公開' : '商品已發佈上架，買家現在看得到了')
   }
-  const approveProductReview = (id: string, ok: boolean) => {
-    setProducts((l) => l.map((p) => (p.id === id ? (ok ? { ...p, reviewHold: false, reviewApproved: true } : { ...p, reviewHold: true, active: false }) : p)))
-    notify(ok ? '商品已核准並公開上架' : '商品審核未通過，已退回賣家')
+  const approveProductReview = async (id: string, ok: boolean) => {
+    if (!authUserId) {
+      notify('請先以管理員身分登入後再審核')
+      return
+    }
+    if (!isProductUuid(id)) {
+      notify('此商品編號無法送審')
+      return
+    }
+    const { data, error } = await supabase.rpc('review_high_price_product', {
+      p_id: id,
+      p_approve: ok,
+    })
+    if (error) {
+      console.error('高價商品審核寫入失敗：', error)
+      notify(`審核失敗：${error.message}`)
+      return
+    }
+    const result = asPriceReviewResult(data)
+    if (!result?.product) {
+      console.error('高價商品審核寫入失敗：', data)
+      notify(result ? '審核失敗：資料庫沒有回傳商品狀態' : '審核失敗：資料庫沒有回傳結果')
+      return
+    }
+    const mapped = mapProductRow(result.product)
+    const accepted = !!mapped && (ok ? priceReviewApproved(mapped) : priceReviewRejected(mapped))
+    if (result.status === 'already_reviewed') {
+      if (!accepted) {
+        notify('審核失敗：資料庫回傳的狀態與已處理結果不一致')
+        return
+      }
+      applySavedProduct(id, result.product)
+      notify(ok ? '此商品已經核准公開，沒有重複變更' : '此商品已經退回，沒有重複變更')
+      return
+    }
+    if (result.status !== 'updated' || !result.ok || !accepted) {
+      console.error('高價商品審核寫入失敗：', data)
+      notify('審核失敗：資料庫沒有寫入商品狀態')
+      return
+    }
+    applySavedProduct(id, result.product)
+    notify(ok ? '已核准公開' : '已退回，商品維持審核鎖定，不會公開')
   }
-  const deleteProduct = (id: string) => {
-    setProducts((l) => l.filter((p) => p.id !== id))
-    setCart((c) => c.filter((l) => l.productId !== id))
+  const resubmitProductReview = async (id: string) => {
+    if (!canWriteProducts() || !authUserId) return
+    if (!isProductUuid(id)) {
+      notify('此商品編號無法重新送審')
+      return
+    }
+    const { data, error } = await supabase.rpc('resubmit_high_price_product', { p_id: id })
+    if (error) {
+      console.error('高價商品重新送審失敗：', error)
+      notify(`重新送審失敗：${error.message}`)
+      return
+    }
+    const result = asPriceReviewResult(data)
+    if (!result?.product) {
+      console.error('高價商品重新送審失敗：', data)
+      notify(result ? '重新送審失敗：資料庫沒有回傳商品狀態' : '重新送審失敗：資料庫沒有回傳結果')
+      return
+    }
+    const mapped = mapProductRow(result.product)
+    if (result.status === 'already_pending') {
+      if (!mapped || !priceReviewPending(mapped)) {
+        notify('重新送審失敗：資料庫回傳的狀態不是待審核')
+        return
+      }
+      applySavedProduct(id, result.product)
+      notify('此商品已在待審核，沒有重複送出')
+      return
+    }
+    if (result.status !== 'updated' || !result.ok || !mapped || !priceReviewPending(mapped)) {
+      console.error('高價商品重新送審失敗：', data)
+      notify(result.status === 'not_rejected' ? '只有已退回的商品可以重新送審' : '重新送審失敗：資料庫沒有把商品退回待審')
+      return
+    }
+    applySavedProduct(id, result.product)
+    notify('已重新送審，管理員核准前不會公開')
+  }
+  const deleteProduct = async (id: string) => {
+    if (!canWriteProducts() || !authUserId) return
+    if (!isProductUuid(id)) {
+      notify('此商品尚未寫入資料庫，無法刪除')
+      return
+    }
+    const { data, error } = await supabase.from('products').delete().eq('id', id).eq('seller_id', authUserId).select('id')
+    if (error || !Array.isArray(data) || data.length === 0) {
+      console.error('商品刪除失敗：', error)
+      notify(`刪除失敗：${error?.message ?? '沒有刪除任何商品'}`)
+      return
+    }
+    setProducts((list) => list.filter((item) => item.id !== id))
+    setCart((c) => c.filter((line) => line.productId !== id))
     notify('商品已刪除')
   }
   const shipOrder = (id: string) => {
-    setOrders((l) => l.map((o) => (o.id === id ? { ...o, status: '已出貨', stage: 0, tracking: `TW${String(Date.now()).slice(-10)}` } : o)))
-    notify('已標記出貨')
+    void id
+    notify('物流尚未串接，不會把訂單標成已出貨。')
   }
 
   /* 買家中心動作 */
-  const myBuyerOrders = account ? orders.filter((o) => o.owner === account.name || o.owner === DEMO_OWNER) : []
-  const centerBadge = myBuyerOrders.filter((o) => ['unpaid', 'shipping'].includes(buyerStage(o))).length
+  const orderUnread = useOrderUnread(!!account)
+  const myBuyerOrders = account ? orders.filter((o) => o.owner === account.name && o.owner !== DEMO_OWNER) : []
+  const centerBadge = orderUnread.count
   const openCenter = () => {
     if (!account) {
       notify('請先登入或註冊買家帳號')
@@ -9176,11 +10287,13 @@ export default function OpenMarketplace() {
     }
     setCenterOpen(true)
   }
-  const advanceTrack = (id: string) =>
-    setOrders((l) => l.map((o) => (o.id === id ? { ...o, stage: Math.min(LAST_STAGE, (o.stage ?? 0) + 1) } : o)))
+  const advanceTrack = (id: string) => {
+    void id
+    notify('物流尚未串接，不會推進配送狀態。')
+  }
   const receiveOrder = (id: string) => {
-    setOrders((l) => l.map((o) => (o.id === id ? { ...o, status: '已完成', stage: LAST_STAGE } : o)))
-    notify('已確認收貨，快去評價商品吧')
+    void id
+    notify('確認收貨尚未啟用，不會把訂單標成已完成。')
   }
   const submitRemit = (id: string, last5: string, fileName?: string) => {
     const d = new Date()
@@ -9204,60 +10317,88 @@ export default function OpenMarketplace() {
     notify('已送出檢舉，平台風控將優先審核')
   }
   const buyerPaid = (id: string) => {
-    const o = orders.find((x) => x.id === id)
-    setOrders((l) => l.map((x) => (x.id === id ? { ...x, payStatus: '已付款' } : x)))
-    if (!o) return
-    const sent = sendSms(o.sellerId, 'paid', `【買個 Pay 服】訂單 ${o.id} 買家已完成 ATM 匯款 ${money(o.total)}，系統已入帳，請盡快出貨。`)
-    notify(sent ? '已完成匯款，並簡訊通知賣家' : '已完成匯款')
+    void id
+    notify('匯款對帳尚未啟用，不會把訂單標成已付款。')
   }
-  const reviewOrder = (id: string, inputs: ReviewInput[]) => {
+  const reviewOrder = async (id: string, inputs: ReviewInput[]) => {
     const o = orders.find((x) => x.id === id)
-    if (!o) return
-    const user = maskName(account?.name ?? o.buyer)
-    const reviewIds = o.items.map((_, i) => `RV${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`)
-    setProducts((prev) =>
-      prev.map((p) => {
-        const added: Review[] = []
-        o.items.forEach((it, i) => {
-          const match = it.productId ? it.productId === p.id : p.sellerId === o.sellerId && p.name === it.name
-          if (match) added.push({ id: reviewIds[i], owner: account?.name, perks: equippedPerks, user, rating: inputs[i].rating, text: inputs[i].text.trim() || '買家未留下文字心得', date: todayStr() })
-        })
-        return added.length ? { ...p, reviews: [...added, ...p.reviews] } : p
-      }),
-    )
-    setOrders((l) => l.map((x) => (x.id === id ? { ...x, reviewed: true } : x)))
-    o.items.forEach((it, i) => {
-      const input = inputs[i]
-      if (!input) return
-      pushNotice(
-        o.sellerId,
-        'review',
-        it.name,
-        `${user} 評價了「${it.name}」：${input.rating} 星`,
-        `訂單 ${o.id}｜${input.text.trim() || '買家未留下文字心得'}`,
-        '',
-        it.productId,
-        reviewIds[i],
-      )
-    })
-    notify('感謝您的評價，已顯示在商品頁面')
+    if (!o) return '找不到訂單'
+    const productIds: string[] = []
+    let photoWarning = ''
+    let blocked = ''
+    for (let index = 0; index < o.items.length; index += 1) {
+      const item = o.items[index]
+      const input = inputs[index]
+      if (!item?.orderItemId || !isProductUuid(item.orderItemId) || !item.productId || !isProductUuid(item.productId)) {
+        blocked = productIds.length
+          ? '部分評價已建立。其餘明細還沒有真實訂單資格，不能繼續評價。'
+          : '真實訂單尚未完成，目前不能建立評價'
+        break
+      }
+      const created = await createProductReview(item.orderItemId, item.productId, input?.rating ?? 0, input?.text ?? '')
+      if (!created.id) {
+        blocked = created.error || '評價送出失敗'
+        break
+      }
+      productIds.push(item.productId)
+      for (const photo of input?.photos ?? []) {
+        const photoError = await uploadReviewPhoto(created.id, dataUrlToBlob(photo))
+        if (photoError && !photoWarning) photoWarning = `評價已建立，但照片沒有全部保存：${photoError}`
+      }
+    }
+    if (!productIds.length) return blocked || '真實訂單尚未完成，目前不能建立評價'
+    if (!blocked) setOrders((list) => list.map((order) => (order.id === id ? { ...order, reviewed: true } : order)))
+    setMyReviews(await fetchMyReviews())
+    const rows = await fetchPublicReviews(productIds)
+    setProducts((current) => current.map((product) => {
+      if (!productIds.includes(product.id)) return product
+      const fresh = rows.filter((row) => row.productId === product.id)
+      return {
+        ...product,
+        reviews: fresh.map((row) => ({
+          id: row.id,
+          user: row.nickname,
+          rating: row.rating,
+          text: row.body,
+          date: row.createdAt.slice(0, 10),
+          reply: row.reply ? { text: row.reply, at: row.repliedAt ?? '' } : undefined,
+          photos: row.photos,
+        })),
+      }
+    }))
+    if (blocked) return blocked
+    if (photoWarning) return photoWarning
+    notify('評價已送出')
+    return ''
   }
-  const replyReview = (productId: string, reviewId: string, text: string) => {
-    const d = new Date()
-    const reply = { text, at: `${todayStr()} ${pad(d.getHours())}:${pad(d.getMinutes())}` }
+  const replyReview = async (productId: string, reviewId: string, text: string) => {
+    if (!isProductUuid(reviewId)) {
+      notify('這不是真實評價，不能回覆')
+      return
+    }
+    const error = await replyToProductReview(reviewId, text)
+    if (error) {
+      notify(error)
+      return
+    }
+    const reply = { text, at: `${todayStr()} ${pad(new Date().getHours())}:${pad(new Date().getMinutes())}` }
     setProducts((prev) =>
       prev.map((p) =>
         p.id === productId ? { ...p, reviews: p.reviews.map((r) => (r.id === reviewId ? { ...r, reply } : r)) } : p,
       ),
     )
-    notify('已回覆買家評價，會顯示在商品頁面')
+    notify('已回覆買家評價')
   }
   const confirmPaid = (id: string) => {
-    setOrders((l) => l.map((o) => (o.id === id ? { ...o, payStatus: '已付款' } : o)))
-    notify('已確認收款')
+    void id
+    notify('收款確認尚未串接，不會把訂單標成已付款。')
   }
   const payRenewal = (method: PayMethod, info: { last4?: string; invoice?: InvoiceOpt }) => {
     const s = mySeller
+    if (!s || s.plan.billingLinked !== true) {
+      notify('月費功能建置中，尚未串接綠界，不會建立付款紀錄')
+      return
+    }
     const wasClosed = isClosed(s)
     const wasTrial = s.plan.status === 'trial'
     const stamp = todayStr()
@@ -9327,8 +10468,8 @@ export default function OpenMarketplace() {
     notify('收款設定已儲存')
   }
   const saveKyc = (k: KycInfo) => {
-    setSellers((l) => l.map((s) => (s.id === mySellerId ? { ...s, kyc: k } : s)))
-    notify('實名認證資料已更新')
+    void k
+    notify('實名狀態以平台審核為準。手機與銀行驗證尚未啟用，不會標記為已驗證。')
   }
   const logExport = (kind: ExportLog['kind'], rows: number) => {
     const d = new Date()
@@ -9536,10 +10677,6 @@ export default function OpenMarketplace() {
       notify(`點數不足，還差 ${c.cost - points} 點`)
       return
     }
-    if (!phoneVerified) {
-      setOtpFor(id)
-      return
-    }
     finishRedeem(c)
   }
   const unlockPerk = (id: string) => {
@@ -9693,10 +10830,20 @@ export default function OpenMarketplace() {
     setCoupons((l) => l.map((x) => (x.id === id ? { ...x, deleted: true, active: false, listed: false, shelf: false } : x)))
     notify(c.redeemed > 0 ? '優惠券紀錄已刪除，已領取的買家仍可使用' : '優惠券紀錄已刪除')
   }
-  const moveSellerToFollow = (sid: string) => {
-    setFollowed((f) => (f.includes(sid) ? f : [...f, sid]))
+  const moveSellerToFollow = async (sid: string) => {
+    const sellerUserId = sellers.find((item) => item.id === sid)?.userId
+    if (!sellerUserId) {
+      notify('這間賣場沒有可關注的會員編號')
+      return
+    }
+    const error = await followSeller(sellerUserId)
+    if (error) {
+      notify(error)
+      return
+    }
+    setFollowed((current) => (current.includes(sellerUserId) ? current : [...current, sellerUserId]))
     setCart((c) => c.filter((l) => products.find((p) => p.id === l.productId)?.sellerId !== sid))
-    notify('已將店家加入追蹤，營業恢復時可再回來選購')
+    notify('已關注賣場。新品通知尚未開放，不會發送通知。')
   }
   const findSimilar = (pid: string) => {
     const p = products.find((x) => x.id === pid)
@@ -9707,6 +10854,11 @@ export default function OpenMarketplace() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   const setShopClosed = (id: string, closed: boolean) => {
+    const target = sellerById.get(id)
+    if (!target || target.plan.billingLinked === false) {
+      notify('月費尚未串接，這個開關不會變更賣場或商品')
+      return
+    }
     setSellers((l) =>
       l.map((s) =>
         s.id !== id
@@ -9762,13 +10914,107 @@ export default function OpenMarketplace() {
   }
 
   /* 管理員動作 */
-  const approveSeller = (id: string) => {
-    setSellers((l) => l.map((s) => (s.id === id ? { ...s, verify: 'approved', rejectReason: undefined } : s)))
-    notify('已批准實名認證，賣家商品已上架至前台')
+  const loadSellerApplications = async () => {
+    const { data, error } = await supabase
+      .from('seller_applications')
+      .select('id, user_id, store_name, legal_name, status, created_at, review_note, kyc_document_path')
+      .order('created_at', { ascending: false })
+  
+    if (error) {
+      console.error('讀取賣家申請失敗：', error)
+      notify('無法讀取賣家申請')
+      return
+    }
+  
+    const realSellers = (data ?? []).map((row) =>
+      mapSellerApplication(row as SellerApplicationRow)
+    )
+    
+    setAdminSellerApplications(realSellers)
   }
-  const rejectSeller = (id: string, reason: string) => {
-    setSellers((l) => l.map((s) => (s.id === id ? { ...s, verify: 'rejected', rejectReason: reason } : s)))
-    notify('已退回申請')
+  const approveSeller = async (id: string) => {
+    const seller = adminSellerApplications.find((s) => s.id === id)
+  
+    if (!seller || seller.verify !== 'pending') {
+      notify('此申請不是待審核狀態')
+      return
+    }
+  
+    const { data, error } = await supabase
+      .from('seller_applications')
+      .update({ status: 'approved', review_note: null })
+      .eq('id', id)
+      .eq('status', 'pending')
+      .select('id, status')
+      .maybeSingle()
+  
+    if (error) {
+      console.error('核准賣家失敗：', error)
+      notify('核准失敗，請確認管理員權限')
+      return
+    }
+  
+    if (!data) {
+      notify('找不到待審核申請，可能已被其他管理員處理')
+      return
+    }
+  
+    setAdminSellerApplications((list) =>
+      list.map((s) =>
+        s.id === id
+          ? { ...s, verify: 'approved', rejectReason: undefined }
+          : s
+      )
+    )
+  
+    notify('賣家申請已核准，資料已儲存至 Supabase')
+  }
+  const rejectSeller = async (id: string, reason: string) => {
+    const seller = adminSellerApplications.find((s) => s.id === id)
+  
+    if (!seller || seller.verify !== 'pending') {
+      notify('此申請不是待審核狀態')
+      return
+    }
+  
+    const note = reason.trim()
+  
+    if (!note) {
+      notify('請填寫退回原因')
+      return
+    }
+  
+    const { data, error } = await supabase
+      .from('seller_applications')
+      .update({
+        status: 'rejected',
+        review_note: note,
+      })
+      .eq('id', id)
+      .eq('status', 'pending')
+      .select('id, status')
+      .maybeSingle()
+  
+    if (error) {
+      console.error('退回賣家申請失敗：', error)
+      notify('退回失敗，請確認管理員權限')
+      return
+    }
+  
+    if (!data) {
+      notify('找不到待審核申請，可能已被處理')
+      return
+    }
+  
+    setAdminSellerApplications((list) =>
+      list.map((s) =>
+        s.id === id
+          ? { ...s, verify: 'rejected', rejectReason: note }
+          : s
+      )
+    )
+  
+    notify('賣家申請已退回，資料已儲存至 Supabase')
   }
   const confirmVerify = (id: string) => {
     setSellers((l) => l.map((s) => (s.id === id ? { ...s, plan: { ...s.plan, status: 'active', periodStart: s.plan.nextDate, nextDate: addMonth(s.plan.nextDate) } } : s)))
@@ -9795,16 +11041,6 @@ export default function OpenMarketplace() {
   const needLoginForReport = () => {
     notify('請先登入會員後再檢舉（不需實名認證）')
     setAuthOpen(true)
-  }
-  const uploadAvatar = (dataUrl: string) => {
-    setBuyerProfile((p) => ({ ...p, avatar: dataUrl }))
-    if (mySeller) setSellers((l) => l.map((x) => (x.id === mySeller.id ? { ...x, logo: dataUrl } : x)))
-    notify('大頭貼已更新')
-  }
-  const removeAvatar = () => {
-    setBuyerProfile((p) => ({ ...p, avatar: undefined }))
-    if (mySeller) setSellers((l) => l.map((x) => (x.id === mySeller.id ? { ...x, logo: undefined } : x)))
-    notify('已移除大頭貼')
   }
   const canReport = (extra?: { reporterType?: 'buyer' | 'brand' }) => {
     if (extra?.reporterType === 'brand') return true
@@ -10048,9 +11284,49 @@ export default function OpenMarketplace() {
   )
 
   const openProduct = products.find((p) => p.id === productId) ?? null
-  const openProductSeller = openProduct ? catalogSeller(openProduct.sellerId, sellerById.get(openProduct.sellerId)) : undefined
-  const storeSeller = storeId ? sellerById.get(storeId) : undefined
-  const chatSeller = chatId ? sellerById.get(chatId) : undefined
+  const openProductSeller = openProduct ? sellerForProduct(openProduct.sellerId) : undefined
+  const openProductFollowKey = openProductSeller?.userId || (openProductSeller && isProductUuid(openProductSeller.id) ? openProductSeller.id : '')
+  useEffect(() => {
+    if (!openProductFollowKey) return
+    let cancelled = false
+    void fetchFollowCounts([openProductFollowKey]).then((counts) => {
+      if (!cancelled) setFollowCounts((current) => ({ ...current, ...counts }))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [openProductFollowKey])
+  const storeSeller = storeId ? sellerById.get(storeId) ?? sellers.find((item) => item.userId === storeId) ?? sellerForProduct(storeId) : undefined
+  const ownLiveStore = !draftPreview && !!authUserId && !!storeSeller && (storeSeller.userId === authUserId || storeId === authUserId)
+  const storeOpen = role !== 'admin' && !!storeSeller && (!!storeId || !!draftPreview)
+  const returnToSellerCenter = () => {
+    setDraftPreview(null)
+    setRoleState('seller')
+    setStoreIdState(null)
+    setSellerTabState('storefront')
+    patchNav({ view: 'seller', tab: 'storefront', store: null, product: null }, 'push')
+  }
+  const openBuyerChat = (sellerKey: string, product?: Product) => {
+    if (!authUserId) {
+      notify('請先登入後再聯繫賣家')
+      setAuthOpen(true)
+      return
+    }
+    const matched = sellers.find((item) => item.id === sellerKey || item.userId === sellerKey)
+    const seller = matched ?? sellerForProduct(sellerKey)
+    const sellerUserId = matched?.userId || (matched ? '' : (isProductUuid(sellerKey) ? sellerKey : ''))
+    if (!isProductUuid(sellerUserId)) {
+      notify('這間賣場尚未對應會員編號，不能傳送訊息')
+      return
+    }
+    setChatTarget({
+      sellerUserId,
+      sellerName: seller.name || '賣場',
+      product: product && isProductUuid(product.id)
+        ? { id: product.id, name: product.name, priceLabel: money(product.price), image: product.image }
+        : null,
+    })
+  }
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-background text-foreground">
@@ -10064,7 +11340,7 @@ export default function OpenMarketplace() {
       />
 
       <header className="sticky top-0 z-30 border-b border-border/70 bg-card/90 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-2.5 px-4 py-2.5 md:gap-x-4 md:py-3">
+        <div className="mx-auto flex max-w-[100rem] flex-wrap items-center gap-x-3 gap-y-2.5 px-4 py-2.5 md:gap-x-4 md:py-3">
           <button type="button" onClick={handleLogoClick} className="flex min-w-0 items-center gap-2" aria-label="買個 Pay 服首頁">
             <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm md:size-9"><Store className="size-[18px] md:size-5" /></span>
             <span className="truncate text-base font-black tracking-tight md:text-lg">買個 Pay 服</span>
@@ -10077,7 +11353,13 @@ export default function OpenMarketplace() {
           <div className="ml-auto flex items-center gap-2">
             <InstallAppButton />
 
-            {role === 'buyer' && (
+            {role === 'buyer' && sellerApproved && (
+              <button type="button" onClick={() => { if (storeId || draftPreview) setStoreId(null); switchRole('seller') }} className={`${btnGhost} py-2`}>
+                <Store className="size-4" />
+                賣家中心
+              </button>
+            )}
+            {role === 'buyer' && !sellerApproved && (
               <button type="button" onClick={() => switchRole('seller')} className={`${btnGhost} hidden py-2 md:inline-flex`}>
                 <Store className="size-4" />
                 我要開店
@@ -10096,7 +11378,22 @@ export default function OpenMarketplace() {
                   thickness={2}
                 />
                 <span className="hidden max-w-24 truncate sm:inline">{account.name}</span>
-                <button type="button" aria-label="登出" onClick={() => { setAccount(null); setAdminAuthed(false); setSellerAccess(false); setRole('buyer'); notify('已登出') }} className="rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
+                <button type="button" aria-label="登出" 
+onClick={async () => {
+  const { error } = await supabase.auth.signOut()
+
+  if (error) {
+    notify(`登出失敗：${error.message}`)
+    return
+  }
+
+  setAccount(null)
+  setAdminAuthed(false)
+  setSellerAccess(false)
+  setRole('buyer')
+  notify('已登出')
+}}>
+
                   <LogOut className="size-3.5" />
                 </button>
               </div>
@@ -10125,7 +11422,7 @@ export default function OpenMarketplace() {
                   <span className="text-xs font-black">{account ? points : 0}</span>
                 </button>
 
-                <button type="button" onClick={openCenter} className={`${btnGhost} relative py-2`} aria-label={`買家中心，${centerBadge} 筆待處理訂單`}>
+                <button type="button" onClick={openCenter} className={`${btnGhost} relative py-2`} aria-label={`買家中心，${centerBadge} 則未讀訂單通知`}>
                   <ClipboardList className="size-4" />
                   買家中心
                   {centerBadge > 0 && (
@@ -10150,9 +11447,100 @@ export default function OpenMarketplace() {
           </div>
         </div>
       </header>
+      {role === 'buyer' && page === 'market' && !storeOpen && <AnnouncementMarquee items={announcements} />}
 
-      <main className="relative mx-auto max-w-7xl px-4 pb-28 md:pb-20">
-        {role === 'buyer' && page === 'rewards' && (
+      <main className="relative mx-auto max-w-[100rem] px-4 pb-28 md:pb-20">
+      {storeOpen && storeSeller && (
+        <StorePage
+          seller={storeSeller}
+          checkin={checkinSellerIds.has(storeSeller.id)}
+          closed={isOffline(storeSeller)}
+          suspended={!!storeSeller.suspended}
+          products={products.filter((p) => {
+            const mine = !!authUserId && !!ownedSellerId && storeSeller.id === ownedSellerId && p.sellerId === authUserId
+            return (p.sellerId === storeSeller.id || p.sellerId === storeSeller.userId || mine) && p.active && !p.draft && !p.flagged && !priceReviewBlocksPublic(p) && !isOffline(storeSeller)
+          })}
+          followed={followed.includes(storeSeller.userId || storeSeller.id)}
+          storefront={draftPreview ? { ...draftPreview, certifiedAt: draftPreview.certifiedAt ?? activeStorefront?.certifiedAt ?? storeSeller.certifiedAt ?? null } : activeStorefront}
+          bannerNote={draftPreview ? {
+            title: '草稿預覽｜尚未發布',
+            detail: '這是編輯中的草稿，使用正式賣場版型。普通買家還看不到，桌機與手機都可以檢查。',
+            action: '返回編輯',
+            onAction: () => {
+              setDraftPreview(null)
+              setStoreIdState(navRef.current.store)
+              setSellerTab('storefront')
+            },
+          } : ownLiveStore ? {
+            title: activeStorefront?.published === false ? '裝潢尚未發布' : '目前公開賣場',
+            detail: activeStorefront?.published === false ? '買家現在看到預設賣場。確認發布後才會換成新裝潢。' : '這是買家看得到的版本，重新整理後會留在這間賣場。',
+            action: '返回賣家中心',
+            onAction: returnToSellerCenter,
+          } : null}
+          backLabel={draftPreview ? '返回編輯' : ownLiveStore ? '返回賣家中心' : '返回商城'}
+          followCount={followCounts[storeSeller.userId || storeSeller.id] ?? 0}
+          onSimilar={(id) => setSimilarProductId(id)}
+          onFollow={() => {
+            const sellerUserId = storeSeller.userId || (isProductUuid(storeSeller.id) ? storeSeller.id : '')
+            if (!authUserId) {
+              notify('請先登入後再關注賣場')
+              setAuthOpen(true)
+              return
+            }
+            if (!sellerUserId) {
+              notify('這間賣場尚未對應會員編號，不能關注')
+              return
+            }
+            const has = followed.includes(sellerUserId)
+            void (has ? unfollowSeller(sellerUserId) : followSeller(sellerUserId)).then((error) => {
+              if (error) {
+                notify(error)
+                return
+              }
+              setFollowed((current) => (has ? current.filter((item) => item !== sellerUserId) : [...current, sellerUserId]))
+              setFollowCounts((current) => ({
+                ...current,
+                [sellerUserId]: Math.max(0, (current[sellerUserId] ?? 0) + (has ? -1 : 1)),
+              }))
+              notify(has ? '已取消關注' : '已關注賣場。新品通知尚未開放。')
+            })
+          }}
+          onClose={() => {
+            if (draftPreview) {
+              setDraftPreview(null)
+              setStoreIdState(navRef.current.store)
+              return
+            }
+            setStoreId(null)
+          }}
+          onOpenProduct={(id) => setProductId(id)}
+          onChat={() => openBuyerChat(storeSeller.userId || storeSeller.id)}
+          viewer={viewer}
+          reportsLeft={reportsLeft}
+          onNeedLogin={needLoginForReport}
+  onReport={(reason, note, evidence) => reportSeller(storeSeller.id, reason, note, evidence)}
+        redeemCoupons={coupons.filter((c) => c.sellerId === storeSeller.id && c.listed && c.active && inWindow(c, todayStr()))}
+        shelfCoupons={coupons.filter((c) => c.sellerId === storeSeller.id && c.shelf && c.active && !c.deleted && inWindow(c, todayStr()))}
+        onClaim={claimShelfCoupon}
+  points={points}
+  ownedCodes={ownedCodes}
+  onRedeem={redeemCoupon}
+  />
+  )}
+  
+        {navRef.current.view === 'seller' && (!authResolved || !sellerStatusReady) && (
+          <p className="mt-10 text-center text-sm font-bold text-muted-foreground">正在確認賣家中心，不會先回到商城首頁。</p>
+        )}
+        {productId && !productsLoaded && (
+          <p className="mt-6 text-center text-sm font-bold">正在開啟商品…</p>
+        )}
+        {productId && productsLoaded && !products.some((item) => item.id === productId) && (
+          <div role="alert" className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm font-bold">
+            <span>此商品已下架或不存在，沒有改開其他商品。</span>
+            <button type="button" onClick={() => setProductId(null)} className="rounded-full bg-card px-4 py-2 text-xs">返回商品列表</button>
+          </div>
+        )}
+        {!storeOpen && role === 'buyer' && page === 'rewards' && navRef.current.view !== 'seller' && (
           <div className="mt-6">
             <button type="button" onClick={() => { setPage('market'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} className={`${btnGhost} py-1.5`}>
               <ArrowLeft className="size-4" />返回市集
@@ -10177,7 +11565,7 @@ export default function OpenMarketplace() {
           </div>
         )}
 
-        {role === 'buyer' && page === 'market' && (
+        {!storeOpen && role === 'buyer' && page === 'market' && !(navRef.current.view === 'seller' && (!authResolved || !sellerStatusReady)) && (
           <>
             <HeroCarousel
               approvedCount={approvedCount}
@@ -10186,6 +11574,7 @@ export default function OpenMarketplace() {
               planPriceText={`${money(PLAN_PRICE)} + 5% 營業稅`}
               onStartSelling={() => switchRole('seller')}
               onQuick={onQuick}
+              photos={heroPhotos}
             />
 
             <QuickGrid active={quick} onSelect={onQuick} />
@@ -10206,13 +11595,37 @@ export default function OpenMarketplace() {
               />
             )}
 
-            {!query.trim() && (
-              <FlashSale
-                items={flashItems}
-                money={money}
-                onOpen={(id) => setProductId(id)}
-                onSeeAll={() => onQuick('hot')}
-              />
+            {!query.trim() && newestProducts.length > 0 && (
+              <section className="mt-6 md:mt-8" aria-label="最新上架">
+                <div className="mb-3 flex items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-black md:text-xl">最新上架</h2>
+                    <p className="text-xs text-muted-foreground">依實際上架時間排序</p>
+                  </div>
+                  <button type="button" onClick={() => onQuick('new')} className="text-xs font-bold text-brand-ink hover:underline">看全部</button>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4">
+                  {newestProducts.map((p) => {
+                    const s = sellerForProduct(p.sellerId)
+                    return <ProductCard key={p.id} product={p} seller={s} checkin={checkinSellerIds.has(s.id)} faved={favorites.includes(p.id)} onFav={() => void toggleFav(p.id)} onOpen={() => setProductId(p.id)} onOpenStore={() => setStoreId(s.userId || s.id)} onSimilar={() => setSimilarProductId(p.id)} />
+                  })}
+                </div>
+              </section>
+            )}
+
+            {!query.trim() && exploreStores.length > 0 && (
+              <section className="mt-6 md:mt-8" aria-label="賣場探索">
+                <h2 className="text-lg font-black md:text-xl">賣場探索</h2>
+                <p className="mb-3 text-xs text-muted-foreground">目前有公開商品的賣場</p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                  {exploreStores.map((store) => (
+                    <button key={store.id} type="button" onClick={() => setStoreId(store.id)} className={`${hoverPanelCls} p-4 text-left`}>
+                      <p className="truncate text-sm font-black">{store.name}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{store.count} 件在架商品</p>
+                    </button>
+                  ))}
+                </div>
+              </section>
             )}
 
             <section id="market-products" className="mt-6 scroll-mt-24 md:mt-8" aria-label="商品列表">
@@ -10253,7 +11666,9 @@ export default function OpenMarketplace() {
                 </label>
               </div>
 
-              {visibleProducts.length === 0 ? (
+              {!productsLoaded ? (
+                <p className="mt-6 text-center text-sm font-bold text-muted-foreground">正在讀取商品…</p>
+              ) : visibleProducts.length === 0 ? (
                 <div className={`${panelCls} mt-6 flex flex-col items-center gap-2 p-14 text-center`}>
                   <Search className="size-10 text-border" />
                   <p className="text-sm text-muted-foreground">找不到符合的商品，換個關鍵字試試</p>
@@ -10261,9 +11676,8 @@ export default function OpenMarketplace() {
               ) : (
                 <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                   {visibleProducts.map((p) => {
-                    const s = sellerById.get(p.sellerId)
-                    if (!s) return null
-                    return <ProductCard key={p.id} product={p} seller={s} checkin={checkinSellerIds.has(s.id)} faved={favorites.includes(p.id)} onFav={() => toggleFav(p.id)} onOpen={() => setProductId(p.id)} onOpenStore={() => setStoreId(s.id)} />
+                    const s = sellerForProduct(p.sellerId)
+                    return <ProductCard key={p.id} product={p} seller={s} checkin={checkinSellerIds.has(s.id)} faved={favorites.includes(p.id)} onFav={() => void toggleFav(p.id)} onOpen={() => setProductId(p.id)} onOpenStore={() => setStoreId(s.userId || s.id)} onSimilar={() => setSimilarProductId(p.id)} />
                   })}
                 </div>
               )}
@@ -10271,32 +11685,38 @@ export default function OpenMarketplace() {
           </>
         )}
 
-        {role === 'seller' && mySeller && (
+        {!storeOpen && role === 'seller' && !sellerApproved && (
+          <div className={`${panelCls} mt-6 p-8 text-center text-sm text-muted-foreground`}>
+            賣家中心只開放給已通過認證的賣家。審核中或一般買家不能進入商品管理、買家訊息或賣場裝潢。
+          </div>
+        )}
+        {!storeOpen && role === 'seller' && sellerApproved && !mySeller && (
+          <div className={`${panelCls} mt-6 p-8 text-center text-sm text-muted-foreground`}>
+            正在讀取您的賣家申請。賣家後台只會進入目前登入帳號自己的賣場。
+          </div>
+        )}
+
+        {!storeOpen && role === 'seller' && sellerApproved && mySeller && (
           <div className="mt-6">
             <SellerDashboard
-              sellers={sellers}
               seller={mySeller}
+              productOwnerId={authUserId}
+              sellerApproved={sellerApproved}
               products={products}
               orders={orders}
-              payments={payments}
-              onSwitchSeller={setMySellerId}
               onSaveProduct={saveProduct}
               onPublishProduct={publishProduct}
               onImportProducts={importProducts}
-              onToggleProduct={toggleProduct}
+              onSetProductActive={setProductActive}
               onDeleteProduct={deleteProduct}
               onShip={shipOrder}
               onConfirmPaid={confirmPaid}
-              onPay={payRenewal}
               onResubmit={resubmit}
-              onSetShopClosed={(c) => setShopClosed(mySeller.id, c)}
+              onResubmitProduct={resubmitProductReview}
               onSavePayment={savePayment}
               onSaveKyc={saveKyc}
               exportLogs={exportLog.filter((l) => l.sellerId === mySeller.id)}
               onExported={logExport}
-              onSimulateFail={() => simulatePayFail(mySeller.id)}
-              onExpireTrial={() => expireTrial(mySeller.id)}
-              onGraceDay={() => advanceGraceDay(mySeller.id)}
               onRefundDecision={decideRefund}
               smsPrefs={prefsOf(mySeller.id)}
               onSmsPrefs={(p) => setSmsPrefs((m) => ({ ...m, [mySeller.id]: p }))}
@@ -10313,7 +11733,6 @@ export default function OpenMarketplace() {
               onSubmitTicket={(t) => submitTicket('seller', t)}
               onReadTicket={readTicket}
               onNotify={notify}
-              onCancelPlan={(c) => setCancelAtPeriodEnd(mySeller.id, c)}
               coupons={coupons.filter((c) => c.sellerId === mySeller.id && !c.founderPrize && !c.deleted)}
               onCreateCoupon={createCoupon}
               onUpdateCoupon={updateCoupon}
@@ -10321,6 +11740,23 @@ export default function OpenMarketplace() {
               onToggleCoupon={toggleCouponListed}
   onToggleCouponShelf={toggleCouponShelf}
               onDeleteCoupon={deleteCoupon}
+              sellerTab={sellerTab}
+              onSellerTab={setSellerTab}
+              onViewStore={() => {
+                if (!authUserId) return
+                setDraftPreview(null)
+                setRole('buyer')
+                setStoreId(authUserId)
+              }}
+              onPreviewStore={(draft) => {
+                if (!authUserId) return
+                setDraftPreview({ ...draft, sellerUserId: authUserId, storeName: mySeller.name })
+                setStoreIdState(authUserId)
+                setSellerTab('storefront')
+              }}
+              chatId={sellerTab === 'messages' ? navRef.current.chat : null}
+              onChatChange={rememberChat}
+              onOrderNoticesChanged={orderUnread.reload}
             />
           </div>
         )}
@@ -10328,11 +11764,33 @@ export default function OpenMarketplace() {
         {role === 'admin' && adminAuthed && (
           <div className="mt-6 space-y-5">
             <AdminSecurityBanner
-              onLogout={() => { setAdminAuthed(false); setRole('buyer'); notify('已登出管理員後台') }}
-              onTimeout={() => { setAdminAuthed(false); setRole('buyer'); notify('閒置逾時，已自動登出管理員後台') }}
+              onLogout={async () => {
+                const { error } = await supabase.auth.signOut()
+                if (error) {
+                  notify(`登出失敗：${error.message}`)
+                  return
+                }
+                setAdminAuthed(false)
+                setAccount(null)
+                setSellerAccess(false)
+                setRole('buyer')
+                notify('已登出管理員後台')
+              }}
+              onTimeout={async () => {
+                const { error } = await supabase.auth.signOut()
+                if (error) {
+                  notify(`登出失敗：${error.message}`)
+                  return
+                }
+                setAdminAuthed(false)
+                setAccount(null)
+                setSellerAccess(false)
+                setRole('buyer')
+                notify('閒置逾時，已自動登出管理員後台')
+              }}
             />
             <AdminDashboard
-              sellers={sellers}
+              sellers={adminSellerApplications}
               products={products}
               orders={orders}
               onApprove={approveSeller}
@@ -10361,6 +11819,7 @@ export default function OpenMarketplace() {
       {welcomeOpen && <WelcomePromoModal threshold={FREE_SHIP} onClose={() => setWelcomeOpen(false)} />}
       {termsOpen && <TermsModal onClose={() => setTermsOpen(false)} />}
       {forgotOpen && <ForgotPasswordModal onClose={() => setForgotOpen(false)} onNotify={notify} />}
+      {recoveryOpen && <SetNewPasswordModal onClose={() => setRecoveryOpen(false)} onNotify={notify} />}
       {tourRole && (
         <OnboardingTour
           role={tourRole}
@@ -10371,33 +11830,6 @@ export default function OpenMarketplace() {
         />
       )}
 
-      {storeSeller && (
-        <StoreModal
-          seller={storeSeller}
-          checkin={checkinSellerIds.has(storeSeller.id)}
-          closed={isOffline(storeSeller)}
-          suspended={!!storeSeller.suspended}
-          products={products.filter((p) => p.sellerId === storeSeller.id && p.active && !p.flagged && !isOffline(storeSeller))}
-          followed={followed.includes(storeSeller.id)}
-          onFollow={() =>
-            setFollowed((f) => (f.includes(storeSeller.id) ? f.filter((x) => x !== storeSeller.id) : [...f, storeSeller.id]))
-          }
-          onClose={() => setStoreId(null)}
-          onOpenProduct={(id) => setProductId(id)}
-          onChat={() => setChatId(storeSeller.id)}
-          viewer={viewer}
-          reportsLeft={reportsLeft}
-          onNeedLogin={needLoginForReport}
-  onReport={(reason, note, evidence) => reportSeller(storeSeller.id, reason, note, evidence)}
-        redeemCoupons={coupons.filter((c) => c.sellerId === storeSeller.id && c.listed && c.active && inWindow(c, todayStr()))}
-        shelfCoupons={coupons.filter((c) => c.sellerId === storeSeller.id && c.shelf && c.active && !c.deleted && inWindow(c, todayStr()))}
-        onClaim={claimShelfCoupon}
-  points={points}
-  ownedCodes={ownedCodes}
-  onRedeem={redeemCoupon}
-  />
-  )}
-  
   {openProduct && openProductSeller && (
         <ProductModal
           key={openProduct.id}
@@ -10417,22 +11849,20 @@ export default function OpenMarketplace() {
           }}
           onOpenStore={() => {
             setProductId(null)
-            setStoreId(openProductSeller.id)
+            setStoreId(openProductSeller.userId || openProductSeller.id)
           }}
-          onChat={() => setChatId(openProductSeller.id)}
+          onChat={() => openBuyerChat(openProduct.sellerId, openProduct)}
           onReport={(reason, note, evidence) => reportProduct(openProduct.id, reason, note, { evidence })}
           viewer={viewer}
           reportsLeft={reportsLeft}
           onNeedLogin={needLoginForReport}
           faved={favorites.includes(openProduct.id)}
           onFav={() => toggleFav(openProduct.id)}
-          similar={products
-            .filter((x) => {
-              const so = sellerById.get(x.sellerId)
-              return x.id !== openProduct.id && x.category === openProduct.category && x.active && !x.flagged && !x.reviewHold && !!so && !isOffline(so)
-            })
-            .slice(0, 3)}
-          onOpenSimilar={(id) => setProductId(id)}
+          onOpenSimilar={(id) => setSimilarProductId(id)}
+          followCount={(() => {
+            const key = openProductSeller.userId || (isProductUuid(openProductSeller.id) ? openProductSeller.id : '')
+            return key && Object.prototype.hasOwnProperty.call(followCounts, key) ? followCounts[key] : undefined
+          })()}
         />
       )}
 
@@ -10442,7 +11872,7 @@ export default function OpenMarketplace() {
           products={products}
           sellers={sellers}
           loggedIn={!!account}
-          buyerName={account?.name ?? ''}
+          buyerName={publicNickname || account?.name || ''}
           onClose={() => setCartOpen(false)}
           onQty={changeQty}
           onRemove={removeLine}
@@ -10463,7 +11893,6 @@ export default function OpenMarketplace() {
         />
       )}
 
-      {otpFor && <PhoneOtpModal onClose={() => setOtpFor(null)} onVerified={verifyPhoneAndRedeem} />}
 
       {redeemedCoupon && (
         <RedeemSuccessModal
@@ -10505,11 +11934,24 @@ export default function OpenMarketplace() {
 
       {takedownOpen && (
         <TakedownModal
-          products={products.filter((p) => p.active && !p.flagged)}
+          products={products.filter((p) => p.active && !p.draft && !p.flagged && !priceReviewBlocksPublic(p))}
           onClose={() => setTakedownOpen(false)}
           onSubmit={(pid, reason, note, extra) => {
             reportProduct(pid, reason, note, extra)
             setTakedownOpen(false)
+          }}
+        />
+      )}
+
+      {similarProductId && (
+        <SimilarProductsDialog
+          productId={similarProductId}
+          productName={products.find((item) => item.id === similarProductId)?.name ?? '商品'}
+          money={money}
+          onClose={() => setSimilarProductId(null)}
+          onOpen={(id) => {
+            setSimilarProductId(null)
+            setProductId(id)
           }}
         />
       )}
@@ -10520,7 +11962,9 @@ export default function OpenMarketplace() {
           orders={myBuyerOrders}
           products={products}
           sellers={sellers}
-          buyerName={account.name}
+          buyerName={publicNickname || account.name}
+          buyerUserId={authUserId ?? undefined}
+          nickname={publicNickname}
           equipped={equippedPerks}
           onClose={() => setCenterOpen(false)}
           onAdvance={advanceTrack}
@@ -10530,11 +11974,12 @@ export default function OpenMarketplace() {
           onUrge={() => notify('已一鍵催單，賣家將收到出貨提醒')}
           onRemit={submitRemit}
           onScamReport={reportScam}
-          onContact={(sid) => setChatId(sid)}
+          onContact={(sid) => openBuyerChat(sid)}
           onRefund={requestRefund}
           onGoStore={(sid) => {
+            const seller = sellers.find((item) => item.userId === sid || item.id === sid)
             setCenterOpen(false)
-            setStoreId(sid)
+            setStoreId(seller?.id ?? sid)
           }}
           favorites={favorites}
           onToggleFav={toggleFav}
@@ -10550,11 +11995,24 @@ export default function OpenMarketplace() {
               return { ...m, [id]: { ...cur, [key]: !cur[key] } }
             })
           }
-          onUnfollow={(id) => setFollowed((f) => f.filter((x) => x !== id))}
+          onUnfollow={(id) => {
+            void unfollowSeller(id).then((error) => {
+              if (error) {
+                notify(error)
+                return
+              }
+              setFollowed((current) => current.filter((item) => item !== id))
+              notify('已取消關注')
+            })
+          }}
           tone={buyerProfile.tone}
           nameChangedAt={buyerProfile.nameChangedAt}
+          nicknameInitialized={buyerProfile.nicknameInitialized}
+          canRename={buyerProfile.canRename}
+          nextRenameAt={buyerProfile.nextRenameAt}
+          myReviews={myReviews}
           onRename={renameBuyer}
-          onAvatar={(i) => setBuyerProfile((p) => ({ ...p, tone: i }))}
+          onAvatar={(i) => void changeAvatarTone(i)}
           avatar={buyerProfile.avatar}
           onAvatarUpload={uploadAvatar}
           onAvatarRemove={removeAvatar}
@@ -10566,18 +12024,26 @@ export default function OpenMarketplace() {
           onSubmitTicket={(t) => submitTicket('buyer', t)}
           onReadTicket={readTicket}
           onNotify={notify}
+          onNoticesChanged={orderUnread.reload}
         />
       )}
 
-      {chatSeller && (
-        <ChatModal
-          key={chatSeller.id}
-          seller={chatSeller}
-          viewer={viewer}
-          onClose={() => setChatId(null)}
-          onMessage={(t) => {
-            const who = maskName(account?.name ?? '訪客')
-            pushNotice(chatSeller.id, 'message', '', `${who} 傳來一則留言`, t, '')
+      {chatTarget && role !== 'seller' && (
+        <SellerChatDialog
+          key={`${chatTarget.sellerUserId || navRef.current.chat}:${chatTarget.product?.id ?? ''}`}
+          sellerUserId={chatTarget.sellerUserId}
+          sellerName={chatTarget.sellerName}
+          product={chatTarget.product}
+          restoreChatId={chatTarget.sellerUserId ? null : navRef.current.chat}
+          onActiveChange={rememberChat}
+          onClose={() => {
+            setChatTarget(null)
+            rememberChat(null)
+          }}
+          onOpenProduct={(id) => {
+            setChatTarget(null)
+            rememberChat(null)
+            setProductId(id)
           }}
         />
       )}
@@ -10596,6 +12062,7 @@ export default function OpenMarketplace() {
             setPage('market')
             if (!account) setAccount({ name: '平台管理員' })
             window.scrollTo({ top: 0, behavior: 'smooth' })
+            void loadSellerApplications()
             notify('管理員身分驗證通過')
           }}
         />
@@ -10623,16 +12090,10 @@ export default function OpenMarketplace() {
             setAuthInitialTab('seller')
             setAuthOpen(true)
           }}
-          onDemo={() => {
-            setGateOpen(false)
-            setMySellerId('s1')
-            setSellerAccess(true)
-            setAccount((a) => a ?? { name: '測試賣家' })
-            setRole('seller')
-            setPage('market')
-            window.scrollTo({ top: 0, behavior: 'smooth' })
-            notify('已進入測試賣家「森日手作陶坊」（體驗模式，免註冊）')
-          }}
+      
+
+          
+
         />
       )}
 
@@ -10642,8 +12103,8 @@ export default function OpenMarketplace() {
           points={account ? points : 0}
           cartCount={cartCount}
           centerBadge={centerBadge}
-          onMarket={() => { setPage('market'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-          onRewards={() => { setPage('rewards'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+          onMarket={() => { if (storeId || draftPreview) setStoreId(null); setPage('market'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+          onRewards={() => { if (storeId || draftPreview) setStoreId(null); setPage('rewards'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
           onCart={() => setCartOpen(true)}
           onCenter={openCenter}
         />

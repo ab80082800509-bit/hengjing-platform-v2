@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { BellRing, Camera, Check, CircleAlert, Heart, HeartOff, Pencil, Store, Trash2, UserRound } from 'lucide-react'
 import { AvatarCropModal } from './avatar-upload'
 
-export const RENAME_COOLDOWN_DAYS = 90
+export const RENAME_COOLDOWN_DAYS = 30
 
 export const AVATAR_TONES = [
   'bg-primary text-primary-foreground',
@@ -43,10 +43,17 @@ export function memberLevel(completedOrders: number) {
   }
 }
 
-export function daysUntilRename(changedAt: string | undefined, now = Date.now()): number {
-  if (!changedAt) return 0
+export function daysUntilRename(changedAt: string | undefined, initialized = false, now = Date.now()): number {
+  if (!initialized || !changedAt) return 0
   const passed = Math.floor((now - new Date(changedAt).getTime()) / 86400000)
   return Math.max(0, RENAME_COOLDOWN_DAYS - passed)
+}
+
+export function formatTaipei(value?: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false })
 }
 
 export function UserAvatar({
@@ -101,7 +108,7 @@ export function BuyerProfileHeader({
   const skinned = Boolean(skinStyle)
   return (
     <div
-      className={`flex items-center gap-3 border-b border-border/60 px-4 py-4 ${skinned ? 'text-zinc-50' : 'bg-muted/40'}`}
+      className={`flex min-w-0 items-center gap-3 border-b border-border/60 px-3 py-3 sm:px-6 sm:py-4 ${skinned ? 'text-zinc-50' : 'bg-muted/40'}`}
       style={skinStyle}
     >
       {avatarNode ?? <UserAvatar name={name} tone={tone} src={avatar} />}
@@ -127,7 +134,7 @@ export function BuyerProfileHeader({
           <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${level.progress}%` }} />
         </div>
       </div>
-      <button type="button" onClick={onEdit} className={`${btnGhost} px-3 py-1.5 text-xs`}>
+      <button type="button" onClick={onEdit} className={`${btnGhost} min-h-10 shrink-0 px-3 py-2 text-xs`}>
         <Pencil className="size-3.5" />編輯
       </button>
     </div>
@@ -139,6 +146,9 @@ export function BuyerProfilePanel({
   tone,
   avatar,
   nameChangedAt,
+  nicknameInitialized = false,
+  canRename = true,
+  nextRenameAt,
   completed,
   onRename,
   onAvatar,
@@ -154,27 +164,35 @@ export function BuyerProfilePanel({
   tone: number
   avatar?: string
   nameChangedAt?: string
+  nicknameInitialized?: boolean
+  canRename?: boolean
+  nextRenameAt?: string | null
   completed: number
-  onRename: (next: string) => void
+  onRename: (next: string) => Promise<string | void> | string | void
   onAvatar: (i: number) => void
-  onAvatarUpload: (dataUrl: string) => void
-  onAvatarRemove: () => void
+  onAvatarUpload: (dataUrl: string) => Promise<string | void> | string | void
+  onAvatarRemove: () => Promise<string | void> | string | void
   onSwitchSeller: () => void
 }) {
   const [cropOpen, setCropOpen] = useState(false)
   const [draft, setDraft] = useState(name)
+  useEffect(() => { setDraft(name) }, [name])
   const [error, setError] = useState('')
-  const wait = daysUntilRename(nameChangedAt)
+  const [busy, setBusy] = useState(false)
+  const wait = canRename ? 0 : Math.max(daysUntilRename(nameChangedAt, nicknameInitialized), 1)
   const level = memberLevel(completed)
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault()
     const v = draft.trim()
-    if (wait > 0) return setError(`名字每 ${RENAME_COOLDOWN_DAYS} 天僅能更改一次，還需等待 ${wait} 天`)
-    if (v.length < 2 || v.length > 20) return setError('名稱需為 2 到 20 個字')
-    if (v === name) return setError('新名稱與目前相同')
+    if (!canRename) return setError(`公開暱稱每 ${RENAME_COOLDOWN_DAYS} 天只能修改一次${nextRenameAt ? `，下次可修改：${formatTaipei(nextRenameAt)}` : ''}`)
+    if (v.length < 2 || v.length > 20) return setError('暱稱需為 2 到 20 個字')
+    if (nicknameInitialized && v === name) return setError('新暱稱與目前相同')
     setError('')
-    onRename(v)
+    setBusy(true)
+    const result = await onRename(v)
+    setBusy(false)
+    if (typeof result === 'string' && result) setError(result)
   }
 
   return (
@@ -203,13 +221,23 @@ export function BuyerProfilePanel({
                 <Camera className="size-3.5" />{avatar ? '更換照片' : '上傳照片'}
               </button>
               {avatar && (
-                <button type="button" onClick={onAvatarRemove} className={`${btnGhost} px-3 py-1.5 text-xs hover:text-destructive`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBusy(true)
+                    void Promise.resolve(onAvatarRemove()).then((result) => {
+                      setBusy(false)
+                      if (typeof result === 'string' && result) setError(result)
+                    })
+                  }}
+                  className={`${btnGhost} px-3 py-1.5 text-xs hover:text-destructive`}
+                >
                   <Trash2 className="size-3.5" />移除照片
                 </button>
               )}
             </div>
             <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
-              支援 JPG / PNG / WEBP，檔案不超過 5MB。未上傳時，會以名稱首字與下方顏色作為預設頭像；賣家模式也可沿用作為店家 Logo。
+              支援 JPG / PNG / WEBP，單張不超過 5MB。未上傳時顯示名稱首字。頭像存在會員自己的空間，不會混用商品圖或證件。
             </p>
           </div>
         </div>
@@ -235,32 +263,38 @@ export function BuyerProfilePanel({
             onClose={() => setCropOpen(false)}
             onSave={(url) => {
               setCropOpen(false)
-              onAvatarUpload(url)
+              setBusy(true)
+              void Promise.resolve(onAvatarUpload(url)).then((result) => {
+                setBusy(false)
+                if (typeof result === 'string' && result) setError(result)
+              })
             }}
           />
         )}
       </div>
 
       <form onSubmit={submit} noValidate className="space-y-3 rounded-2xl border border-border/70 bg-card p-4 shadow-sm">
-        <h3 className="text-sm font-black">顯示名稱</h3>
+        <h3 className="text-sm font-black">公開暱稱</h3>
         <div className="space-y-1.5">
           <label htmlFor="profile-name" className="sr-only">顯示名稱</label>
           <input
             id="profile-name"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            disabled={wait > 0}
+            disabled={!canRename || busy}
             maxLength={20}
             className={`${inputCls} disabled:cursor-not-allowed disabled:bg-muted`}
           />
           <p className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
             <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-            名字每 {RENAME_COOLDOWN_DAYS} 天內僅能更改一次，修改後訂單與評價仍會保留。
+            {nicknameInitialized
+              ? `公開暱稱與實名、賣家負責人、Email 分開。已設定後每 ${RENAME_COOLDOWN_DAYS} 天才能再改，時間以資料庫為準。`
+              : '這是第一次設定公開暱稱，不需要等待 30 天。它不會覆蓋實名或登入 Email。'}
           </p>
-          {wait > 0 && <p className="text-xs font-bold text-amber-400">目前無法修改，還需等待 {wait} 天。</p>}
+          {nextRenameAt && !canRename && <p className="text-xs font-bold text-amber-400">冷卻中，下次可修改：{formatTaipei(nextRenameAt)}。</p>}
           {error && <p role="alert" className="text-xs font-bold text-destructive">{error}</p>}
         </div>
-        <button type="submit" disabled={wait > 0} className={btnPrimary}>儲存名稱</button>
+        <button type="submit" disabled={!canRename || busy} className={btnPrimary}>{busy ? '儲存中' : '儲存暱稱'}</button>
       </form>
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-card p-4 shadow-sm">
@@ -284,6 +318,8 @@ export interface FavItem {
   price: number
   soldOut: boolean
   sellerName: string
+  unavailable?: boolean
+  purchaseLabel?: string
 }
 
 export function FavoritesPanel({
@@ -309,18 +345,17 @@ export function FavoritesPanel({
     <ul className="grid gap-3 sm:grid-cols-2" aria-label="我的收藏">
       {items.map((it) => (
         <li key={it.id} className="flex gap-3 rounded-2xl border border-border/70 bg-card p-3 shadow-sm">
-          <button type="button" onClick={() => onOpen(it.id)} className="size-20 shrink-0 overflow-hidden rounded-xl border border-border/70">
-            {renderThumb(it.id)}
+          <button type="button" onClick={() => { if (!it.unavailable) onOpen(it.id) }} disabled={it.unavailable} className="size-20 shrink-0 overflow-hidden rounded-xl border border-border/70 disabled:cursor-default">
+            {it.unavailable ? <span className="flex h-full items-center justify-center bg-muted text-[10px] text-muted-foreground">不可查看</span> : renderThumb(it.id)}
           </button>
           <div className="flex min-w-0 flex-1 flex-col">
-            <button type="button" onClick={() => onOpen(it.id)} className="line-clamp-2 text-left text-sm font-bold hover:text-brand-ink">
+            <button type="button" onClick={() => { if (!it.unavailable) onOpen(it.id) }} disabled={it.unavailable} className="line-clamp-2 text-left text-sm font-bold hover:text-brand-ink disabled:hover:text-foreground">
               {it.name}
             </button>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">{it.sellerName}</p>
             <div className="mt-auto flex items-center justify-between gap-2 pt-1">
               <p className="text-sm font-black text-brand-ink">
-                NT$ {it.price.toLocaleString('en-US')}
-                {it.soldOut && <span className="ml-1.5 text-xs font-bold text-destructive">已售完</span>}
+                {it.unavailable ? '此商品目前無法公開查看' : <>NT$ {it.price.toLocaleString('en-US')}{it.purchaseLabel ? <span className="ml-1.5 text-xs font-bold text-muted-foreground">{it.purchaseLabel}</span> : null}</>}
               </p>
               <button
                 type="button"
@@ -368,7 +403,7 @@ export function FollowingPanel({
     return (
       <div className="flex flex-col items-center gap-2 py-14 text-center">
         <BellRing className="size-12 text-border" />
-        <p className="text-sm text-muted-foreground">還沒有關注任何賣家，進入店鋪點「關注」即可收到新品與優惠通知</p>
+        <p className="text-sm text-muted-foreground">還沒有關注任何賣家。關注會保存在帳號裡；新品通知這次尚未開放，不會發送通知。</p>
       </div>
     )
   }
@@ -377,7 +412,7 @@ export function FollowingPanel({
     <ul className="space-y-3" aria-label="關注的賣家">
       {sellers.map((s) => (
         <li key={s.id} className="space-y-3 rounded-2xl border border-border/70 bg-card p-4 shadow-sm">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {renderAvatar(s.id)}
             <div className="min-w-0 flex-1">
               <button type="button" onClick={() => onGoStore(s.id)} className="block truncate text-left text-sm font-black hover:text-brand-ink hover:underline">
@@ -385,11 +420,12 @@ export function FollowingPanel({
               </button>
               <p className="text-xs text-muted-foreground">{s.city}</p>
             </div>
-            <button type="button" onClick={() => onUnfollow(s.id)} className={`${btnGhost} px-3 py-1.5 text-xs`}>
+            <button type="button" onClick={() => onUnfollow(s.id)} className={`${btnGhost} min-h-10 shrink-0 px-3 py-1.5 text-xs`}>
               取消關注
             </button>
           </div>
-          <div className="flex flex-wrap gap-2" role="group" aria-label={`${s.name} 的通知設定`}>
+          <p className="text-xs text-muted-foreground">新品通知尚未開放，目前只保存關注，不會發送通知。</p>
+          <div className="hidden" role="group" aria-label={`${s.name} 的通知設定`}>
             {(
               [
                 ['newItem', '新品上架通知'],
