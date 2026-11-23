@@ -1,3 +1,4 @@
+// 進站點擊只會記下訪客。刮卡加次數必須等受邀者完成註冊，這個入口不發獎。
 import { eq, sql } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'

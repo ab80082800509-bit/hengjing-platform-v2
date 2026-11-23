@@ -2,6 +2,9 @@ export const SELLER_TABS = ['products', 'orders', 'reports', 'messages', 'coupon
 export type SellerTab = (typeof SELLER_TABS)[number]
 export type MarketSort = 'new' | 'hot' | 'low' | 'high'
 export type MarketQuick = 'freeShip' | 'hot' | 'founder' | 'new'
+export type MarketPage = 'market' | 'rewards' | 'arcade'
+export type ArcadeGame = 'merge' | 'blocks' | 'street' | null
+const ARCADE_GAME_IDS = ['merge', 'blocks', 'street'] as const
 
 export type MarketplaceNav = {
   product: string | null
@@ -12,11 +15,14 @@ export type MarketplaceNav = {
   sub: string | null
   sort: MarketSort
   quick: MarketQuick | null
-  page: 'market' | 'rewards'
+  page: MarketPage
+  game: ArcadeGame
   view: 'buyer' | 'seller'
   center: boolean
   tab: SellerTab | null
   chat: string | null
+  /** 夢想商店街拜訪目標。只在街景頁有效，不是會員名錄。 */
+  visit: string | null
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -31,10 +37,12 @@ export const EMPTY_NAV: MarketplaceNav = {
   sort: 'hot',
   quick: null,
   page: 'market',
+  game: null,
   view: 'buyer',
   center: false,
   tab: null,
   chat: null,
+  visit: null,
 }
 
 const uuid = (value: string | null) => (value && UUID_RE.test(value) ? value : null)
@@ -49,6 +57,7 @@ export function readMarketplaceNav(params: Pick<URLSearchParams, 'get'>): Market
   const page = params.get('page')
   const view = params.get('view')
   const tab = params.get('tab')
+  const game = page === 'arcade' && ARCADE_GAME_IDS.includes(params.get('game') as (typeof ARCADE_GAME_IDS)[number]) ? (params.get('game') as ArcadeGame) : null
   return {
     product: uuid(params.get('p')),
     store: uuid(params.get('store')),
@@ -58,11 +67,13 @@ export function readMarketplaceNav(params: Pick<URLSearchParams, 'get'>): Market
     sub: clip(params.get('sub'), 40),
     sort: sort === 'new' || sort === 'hot' || sort === 'low' || sort === 'high' ? sort : 'hot',
     quick: quick === 'freeShip' || quick === 'hot' || quick === 'founder' || quick === 'new' ? quick : null,
-    page: page === 'rewards' ? 'rewards' : 'market',
+    page: page === 'rewards' ? 'rewards' : page === 'arcade' ? 'arcade' : 'market',
+    game,
     view: view === 'seller' ? 'seller' : 'buyer',
     center: params.get('center') === '1',
     tab: SELLER_TABS.includes(tab as SellerTab) ? (tab as SellerTab) : null,
     chat: uuid(params.get('chat')),
+    visit: game === 'street' ? uuid(params.get('visit')) : null,
   }
 }
 
@@ -76,7 +87,9 @@ export function marketplaceHref(pathname: string, nav: MarketplaceNav) {
   if (nav.sub) params.set('sub', nav.sub)
   if (nav.sort !== 'hot') params.set('sort', nav.sort)
   if (nav.quick) params.set('quick', nav.quick)
-  if (nav.page === 'rewards') params.set('page', 'rewards')
+  if (nav.page !== 'market') params.set('page', nav.page)
+  if (nav.page === 'arcade' && nav.game) params.set('game', nav.game)
+  if (nav.page === 'arcade' && nav.game === 'street' && nav.visit) params.set('visit', nav.visit)
   if (nav.view === 'seller') params.set('view', 'seller')
   if (nav.center) params.set('center', '1')
   if (nav.view === 'seller' && nav.tab) params.set('tab', nav.tab)

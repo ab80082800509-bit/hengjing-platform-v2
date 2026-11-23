@@ -1,7 +1,7 @@
 'use client'
 
 import { useId, useState, type ReactNode } from 'react'
-import { CreditCard, Gift, Percent, Plus, RefreshCw, Save, Sparkles, Store } from 'lucide-react'
+import { CreditCard, Gift, Percent, Plus, RefreshCw, Save, Sparkles, Store, Truck } from 'lucide-react'
 import { btnGhost, btnPrimary, inputCls } from './styles'
 import { couponTitle, foldLabel, kindOf, slashDate, type CouponDraft, type CouponKind, type CouponLike } from './coupon-utils'
 
@@ -47,6 +47,7 @@ const KINDS: { key: CouponKind; label: string; desc: string; Icon: typeof Gift }
   { key: 'cash', label: '滿額折現', desc: '例：滿 $1,000 折 $50，適合拉高客單價', Icon: CreditCard },
   { key: 'percent', label: '滿額打折', desc: '例：滿 $1,500 享 9 折，可設折抵上限', Icon: Percent },
   { key: 'gift', label: '滿額贈禮券', desc: '達門檻隨包裹附贈小禮物，不折抵金額', Icon: Gift },
+  { key: 'freeship', label: '免運優惠', desc: '達門檻免該店運費，運費由賣家吸收', Icon: Truck },
 ]
 
 export function CouponForm({
@@ -63,7 +64,7 @@ export function CouponForm({
   maxListed: number
   redeemCost: number
   initial?: CouponLike
-  onSubmit: (draft: CouponDraft) => string | null
+  onSubmit: (draft: CouponDraft) => string | null | Promise<string | null>
   onCancel: () => void
 }) {
   const uid = useId()
@@ -85,6 +86,7 @@ export function CouponForm({
   const started = !!initial?.startAt && initial.startAt <= today
   const [errors, setErrors] = useState<Errors>({})
   const [submitError, setSubmitError] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const slotsLeft = Math.max(0, maxListed - listedCount)
   const minN = Number(minSpend) || 0
@@ -124,28 +126,34 @@ export function CouponForm({
     return e
   }
 
-  const submit = (ev: React.FormEvent) => {
+  const submit = async (ev: React.FormEvent) => {
     ev.preventDefault()
+    if (saving) return
     const e = validate()
     setErrors(e)
     setSubmitError('')
     if (Object.keys(e).length) return
-    const err = onSubmit({
-      name: name.trim(),
-      code: code.trim().toUpperCase(),
-      kind,
-      amount: kind === 'cash' ? amountN : 0,
-      percent: kind === 'percent' ? percentN : 0,
-      maxDiscount: kind === 'percent' ? maxDiscountN : 0,
-      gift: kind === 'gift' ? giftText : '',
-      minSpend: minN,
-      qty: qtyN,
-      startAt,
-      endAt,
-      listed,
-      shelf,
-    })
-    if (err) setSubmitError(err)
+    setSaving(true)
+    try {
+      const err = await onSubmit({
+        name: name.trim(),
+        code: code.trim().toUpperCase(),
+        kind,
+        amount: kind === 'cash' ? amountN : 0,
+        percent: kind === 'percent' ? percentN : 0,
+        maxDiscount: kind === 'percent' ? maxDiscountN : 0,
+        gift: kind === 'gift' ? giftText : '',
+        minSpend: minN,
+        qty: qtyN,
+        startAt,
+        endAt,
+        listed,
+        shelf,
+      })
+      if (err) setSubmitError(err)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const aria = (k: keyof Errors, hint = false) => ({
@@ -153,7 +161,7 @@ export function CouponForm({
     'aria-describedby': errors[k] || hint ? `${id(k)}-msg` : undefined,
   })
 
-  const showPreview = minN > 0 && (kind === 'cash' ? amountN > 0 : kind === 'percent' ? percentValid : giftText.length > 0)
+  const showPreview = minN > 0 && (kind === 'cash' ? amountN > 0 : kind === 'percent' ? percentValid : kind === 'freeship' ? true : giftText.length > 0)
 
   return (
     <form onSubmit={submit} noValidate className="space-y-5 p-5">
@@ -164,7 +172,7 @@ export function CouponForm({
       )}
       <fieldset className="space-y-2" disabled={locked}>
         <legend className="text-xs font-bold text-foreground">折扣類型</legend>
-        <div className="grid gap-2.5 sm:grid-cols-3">
+        <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
           {KINDS.map(({ key, label, desc, Icon }) => (
             <label
               key={key}
@@ -261,7 +269,7 @@ export function CouponForm({
               開放買家使用【平台簽到點數／刮刮樂】兌換此優惠券
             </span>
             <span className="block text-xs leading-relaxed text-muted-foreground">
-              勾選後將獲得首頁簽到專區與幸運刮刮卡獎池之免費曝光流量。買家以 {redeemCost} 點兌換，或在刮刮卡中獎時取得；折抵金額由您自行吸收，平台不提供現金或購物金折抵。
+              勾選後可進入幸運刮刮卡的免費曝光券池，買家也能用 {redeemCost} 點兌換。平台不向您收取曝光費，不保證曝光次數，也不保證一定被領取。折抵由您自行吸收。
             </span>
             <span className={`block text-xs font-bold ${slotsLeft === 0 ? 'text-amber-400' : 'text-muted-foreground'}`}>
               {slotsLeft === 0 ? `曝光名額已滿（${listedCount} / ${maxListed}），請先在列表中停止其他券的曝光` : `目前已使用 ${listedCount} / ${maxListed} 個曝光名額`}
@@ -306,7 +314,7 @@ export function CouponForm({
         <button type="button" onClick={onCancel} className={btnGhost}>
           取消
         </button>
-        <button type="submit" className={btnPrimary}>
+        <button type="submit" className={btnPrimary} disabled={saving}>
           {initial ? <Save className="size-4" aria-hidden /> : <Plus className="size-4" aria-hidden />}
           {initial ? '儲存變更' : '建立折價券'}
         </button>

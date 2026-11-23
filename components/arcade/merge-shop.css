@@ -1,0 +1,267 @@
+/* 合成小舖正式美術，來源是 design/merge-shop-visual-proposal/index.html。全部限定在 .ms-game 內。 */
+.ms-game{--ink:#4a2c1a;--orange:#f97316;--orange-d:#c2410c;--cream:#fff7ea;--paper:#fffaf1;--green:#3fae2a;--font:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif}
+.ms-game *{box-sizing:border-box}
+.ms-game button{font-family:inherit;color:inherit}
+.ms-game .outline{text-shadow:0 2px 0 var(--ink),2px 0 0 var(--ink),-2px 0 0 var(--ink),0 -2px 0 var(--ink),1.5px 1.5px 0 var(--ink),-1.5px 1.5px 0 var(--ink),1.5px -1.5px 0 var(--ink),-1.5px -1.5px 0 var(--ink),0 4px 0 var(--ink)}
+.ms-game{container:msgame/inline-size;position:relative;width:100%;overflow:hidden;display:flex;flex-direction:column;
+  background:linear-gradient(#ffe7c7,#ffd6a1);font-family:var(--font);color:var(--ink);user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+.ms-game svg{display:block}
+.ms-game .g-hud{position:relative;z-index:6;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px 10px;
+  background:linear-gradient(#ffa24c,#f97316);border-bottom:4px solid var(--ink);box-shadow:0 3px 0 rgba(74,44,26,.25)}
+.ms-game .hud-shop{display:flex;align-items:center;gap:10px;min-width:0}
+.ms-game .lv-badge{position:relative;flex:none;width:50px;height:50px;border-radius:16px;background:linear-gradient(#fffaf0,#ffd88f);border:3px solid var(--ink);box-shadow:0 3px 0 var(--ink);display:grid;place-items:center}
+.ms-game .lv-badge svg{width:38px;height:38px}
+.ms-game .lv-badge b{position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;font-size:11px;font-weight:900;padding:1px 7px;border-radius:999px;border:2px solid #fff;white-space:nowrap}
+.ms-game .hud-title{font-weight:900;color:#fff;font-size:17px;white-space:nowrap;letter-spacing:.03em}
+.ms-game .xpbar{position:relative;height:17px;width:150px;border-radius:999px;background:#8a3a12;border:2px solid var(--ink);overflow:hidden;margin-top:5px}
+.ms-game .xpbar i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(#b5f57a,#46b52f);border-radius:999px;transition:width .7s cubic-bezier(.3,1.4,.5,1)}
+.ms-game .xpbar i::after{content:"";position:absolute;left:4px;right:4px;top:2px;height:4px;border-radius:9px;background:rgba(255,255,255,.55)}
+.ms-game .xpbar span{position:relative;display:block;text-align:center;font-size:10.5px;font-weight:900;color:#fff;line-height:13px;text-shadow:0 1px 0 #3a1a08,0 0 2px #3a1a08}
+.ms-game .hud-right{display:flex;gap:8px;flex:none}
+.ms-game .pill{position:relative;display:flex;align-items:center;gap:5px;background:#fff8e8;border:3px solid var(--ink);border-radius:999px;padding:1px 12px 1px 2px;box-shadow:0 3px 0 var(--ink);font-weight:900;font-size:16px;min-width:76px}
+.ms-game .pill svg{width:28px;height:28px;margin:-4px 0 -4px -4px}
+.ms-game .pill.bump{animation:ms-bump .25s}
+@keyframes ms-bump{50%{transform:scale(1.15)}}
+.ms-game .scene{position:relative;height:196px;flex:none;overflow:hidden;border-bottom:4px solid var(--ink)}
+.ms-game .scene-bg{position:absolute;inset:0;width:100%;height:100%}
+.ms-game .customers{position:absolute;left:0;right:0;top:0;bottom:29px;display:flex;justify-content:space-around;align-items:flex-end;padding:0 4px}
+.ms-game .cust-name{position:absolute;left:50%;bottom:-27px;transform:translateX(-50%);z-index:4;background:linear-gradient(#fff7ea,#f6d6a6);border:2px solid var(--ink);border-radius:8px;padding:0 10px;font-size:12px;font-weight:900;line-height:18px;box-shadow:0 2px 0 var(--ink);white-space:nowrap}
+.ms-game .cust{position:relative;width:49%;max-width:250px;display:flex;flex-direction:column;align-items:center}
+.ms-game .cust.enter{animation:ms-custIn .55s cubic-bezier(.3,1.4,.5,1)}
+.ms-game .cust.leave{animation:ms-custOut .45s ease-in forwards}
+@keyframes ms-custIn{from{transform:translateY(40px);opacity:0}}
+@keyframes ms-custOut{to{transform:translateY(60px);opacity:0}}
+.ms-game .cust-avatar{width:80px;height:87px;margin-bottom:-18px;animation:ms-breathe 2.6s ease-in-out infinite;transform-origin:50% 100%}
+.ms-game .cust:nth-child(2) .cust-avatar{animation-delay:-1.3s}
+.ms-game .cust-avatar svg{width:100%;height:100%}
+@keyframes ms-breathe{50%{transform:translateY(-2px) scaleY(1.015)}}
+.ms-game .bubble{position:relative;display:flex;gap:7px;align-items:center;background:#fff;border:3px solid var(--ink);border-radius:16px;padding:7px 8px 7px 7px;box-shadow:0 3px 0 var(--ink);margin-bottom:9px}
+.ms-game .bubble::after{content:"";position:absolute;bottom:-9px;left:50%;width:13px;height:13px;background:#fff;border-right:3px solid var(--ink);border-bottom:3px solid var(--ink);transform:translateX(-50%) rotate(45deg)}
+.ms-game .bub-art{position:relative;width:50px;height:50px;flex:none;background:#fff3df;border-radius:12px;box-shadow:inset 0 -3px 0 #f1d3a8}
+.ms-game .bub-art svg{width:100%;height:100%}
+.ms-game .qty{position:absolute;right:-7px;bottom:-7px;background:var(--orange);color:#fff;font-weight:900;font-size:12px;border:2px solid var(--ink);border-radius:999px;padding:0 5px;line-height:16px}
+.ms-game .bub-name{font-weight:900;font-size:13px;white-space:nowrap}
+.ms-game .bub-reward{display:flex;gap:6px;font-size:11px;font-weight:900;align-items:center;white-space:nowrap}
+.ms-game .bub-reward span{display:flex;align-items:center;gap:1px}
+.ms-game .bub-reward svg{width:15px;height:15px}
+.ms-game .btn-serve{margin-top:4px;font-weight:900;font-size:12px;padding:3px 10px;border-radius:999px;border:2px solid var(--ink);background:#e7ddd0;color:#8a7461;box-shadow:0 2px 0 var(--ink);cursor:default;white-space:nowrap}
+.ms-game .btn-serve.ready{background:linear-gradient(#93e861,#3fae2a);color:#fff;text-shadow:0 1px 0 #1f6b14;cursor:pointer;animation:ms-readyPulse 1.1s ease-in-out infinite}
+@keyframes ms-readyPulse{50%{transform:scale(1.08);box-shadow:0 2px 0 var(--ink),0 0 0 4px rgba(147,232,97,.45)}}
+.ms-game .cust.happy .cust-avatar{animation:ms-hop .5s ease-out 2}
+@keyframes ms-hop{40%{transform:translateY(-10px)}}
+.ms-game .hearts{position:absolute;left:50%;bottom:40px;width:0;height:0;pointer-events:none;z-index:5}
+.ms-game .hearts i{position:absolute;width:20px;height:20px;color:#fb7185;animation:ms-heart 1.1s ease-out forwards}
+.ms-game .hearts i svg{width:100%;height:100%}
+@keyframes ms-heart{from{transform:translate(-50%,0) scale(.3);opacity:0}25%{opacity:1}to{transform:translate(calc(-50% + var(--dx)),-70px) scale(1.1);opacity:0}}
+.ms-game .counter{position:absolute;left:0;right:0;bottom:0;height:38px;z-index:3;border-top:4px solid var(--ink);
+  background:repeating-linear-gradient(90deg,rgba(0,0,0,.05) 0 2px,transparent 2px 60px),linear-gradient(#e5a869,#b8763a)}
+.ms-game .counter::before{content:"";position:absolute;left:0;right:0;top:0;height:8px;background:#f6cf98;border-bottom:2px solid rgba(74,44,26,.35)}
+.ms-game .counter .register{position:absolute;left:6px;bottom:20px;width:62px;height:46px}
+.ms-game .counter .jar{position:absolute;right:8px;bottom:22px;width:44px;height:44px}
+.ms-game .g-main{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
+.ms-game .g-center{display:flex;flex-direction:column;align-items:center}
+.ms-game .tray{margin:8px auto 0;padding:9px;border-radius:22px;width:calc(100% - 18px);max-width:356px;background:linear-gradient(#dfa262,#a86a32);border:3px solid var(--ink);
+  box-shadow:inset 0 3px 0 rgba(255,255,255,.35),inset 0 -4px 0 rgba(0,0,0,.2),0 5px 0 var(--ink)}
+.ms-game .board{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;padding:7px;background:#7a4a1e;border-radius:15px;box-shadow:inset 0 3px 6px rgba(0,0,0,.4);touch-action:none}
+.ms-game .tile{all:unset;position:relative;aspect-ratio:1;border-radius:13px;background:linear-gradient(#fff8ea,#f6dfbd);cursor:pointer;
+  box-shadow:inset 0 -4px 0 rgba(160,100,40,.3),inset 0 2px 0 #fff;transition:box-shadow .15s}
+.ms-game .tile:nth-child(even){background:linear-gradient(#fff2d8,#f0d0a2)}
+.ms-game .tile .plate{position:absolute;left:16%;right:16%;bottom:9%;height:15%;border-radius:50%;opacity:0}
+.ms-game .tile[data-chain=tea] .plate{opacity:1;background:rgba(116,190,72,.33)}
+.ms-game .tile[data-chain=snack] .plate{opacity:1;background:rgba(245,120,160,.3)}
+.ms-game .tile[data-chain=gift] .plate{opacity:1;background:rgba(74,152,232,.3)}
+.ms-game .tile .item{position:absolute;inset:7%;transition:transform .15s}
+.ms-game .tile .item svg{width:100%;height:100%;filter:drop-shadow(0 2px 0 rgba(74,44,26,.12))}
+.ms-game .tile .pips{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);display:flex;gap:1.5px}
+.ms-game .tile .pips i{width:6px;height:6px;border-radius:50%;background:#ffd23f;border:1.5px solid var(--ink)}
+.ms-game .tile.lv5::before{content:"";position:absolute;inset:-2%;border-radius:50%;
+  background:repeating-conic-gradient(rgba(255,206,60,.75) 0 10deg,transparent 10deg 30deg);
+  -webkit-mask:radial-gradient(circle,#000 25%,transparent 68%);mask:radial-gradient(circle,#000 25%,transparent 68%);animation:ms-spin 7s linear infinite}
+@keyframes ms-spin{to{transform:rotate(360deg)}}
+.ms-game .tile.sel{box-shadow:0 0 0 3px #fff,0 0 0 6px #ffb020,0 0 18px 6px rgba(255,190,40,.75);z-index:2}
+.ms-game .tile.sel .item{transform:translateY(-5px) scale(1.1)}
+.ms-game .tile.empty.sel{box-shadow:inset 0 0 0 3px #ffb020,inset 0 -4px 0 rgba(160,100,40,.3)}
+.ms-game .tile.match .item,.ms-game .tile.hint .item{animation:ms-wiggle .9s ease-in-out infinite}
+.ms-game .tile.match::after{content:"";position:absolute;inset:2px;border-radius:12px;border:3px dashed #3fae2a;animation:ms-dash 1s ease-in-out infinite}
+.ms-game .tile.hint::after{content:"";position:absolute;inset:2px;border-radius:12px;border:3px solid rgba(255,255,255,.95);box-shadow:0 0 12px #fff;animation:ms-dash 1s ease-in-out infinite}
+@keyframes ms-wiggle{25%{transform:rotate(-7deg) scale(1.05)}75%{transform:rotate(7deg) scale(1.05)}}
+@keyframes ms-dash{50%{opacity:.35}}
+.ms-game .tile.over{box-shadow:inset 0 0 0 4px #3fae2a,0 0 14px rgba(63,174,42,.8)}
+.ms-game .tile.dragging .item{opacity:.25}
+.ms-game .tile .want{position:absolute;top:-4px;right:-4px;width:19px;height:19px;border-radius:50%;background:#3fae2a;border:2px solid #fff;box-shadow:0 1px 0 var(--ink);display:none;z-index:3}
+.ms-game .tile .want svg{width:100%;height:100%}
+.ms-game .tile.wanted .want{display:block;animation:ms-bump 1.4s infinite}
+.ms-game .item.pop{animation:ms-pop .5s cubic-bezier(.3,1.7,.5,1)}
+.ms-game .item.squish{animation:ms-squish .26s}
+@keyframes ms-pop{0%{transform:scale(.2)}55%{transform:scale(1.28)}100%{transform:scale(1)}}
+@keyframes ms-squish{50%{transform:scale(1.15,.85)}}
+.ms-game .dock{display:flex;justify-content:space-between;align-items:flex-end;gap:8px;padding:6px 12px 10px;width:100%}
+.ms-game .dock-btn{all:unset;box-sizing:border-box;flex:1;position:relative;display:flex;flex-direction:column;align-items:center;gap:1px;cursor:pointer;
+  background:linear-gradient(#fffaf0,#ffe1b5);border:3px solid var(--ink);border-radius:16px;box-shadow:0 4px 0 var(--ink);padding:5px 2px 6px;font-weight:900;font-size:12px;text-align:center}
+.ms-game .dock-btn svg{width:36px;height:36px}
+.ms-game .dock-btn:active,.ms-game .crate-btn:active{transform:translateY(3px);box-shadow:0 1px 0 var(--ink)}
+.ms-game .dock-btn small{font-size:10px;font-weight:900;display:flex;align-items:center;gap:1px}
+.ms-game .dock-btn small svg{width:13px;height:13px}
+.ms-game .dock-btn.can{background:linear-gradient(#a3ee70,#3fae2a);color:#fff;text-shadow:0 1px 0 #1f6b14}
+.ms-game .dock-btn.can .up-arrow{animation:ms-arrowUp .9s ease-in-out infinite}
+@keyframes ms-arrowUp{50%{transform:translateY(-4px)}}
+.ms-game .dock-btn.off{opacity:.65}
+.ms-game .badge-dot{position:absolute;top:-9px;right:-5px;background:#ef4444;color:#fff;font-size:11px;font-weight:900;border:2px solid #fff;border-radius:999px;padding:0 6px;line-height:16px}
+.ms-game .badge-dot.glow{animation:ms-bump 1s infinite}
+.ms-game .crate-btn{all:unset;box-sizing:border-box;flex:1.5;position:relative;display:flex;flex-direction:column;align-items:center;cursor:pointer;
+  background:linear-gradient(#ffb15c,#f97316);border:3px solid var(--ink);border-radius:18px;box-shadow:0 4px 0 var(--ink);padding:0 4px 6px;color:#fff;font-weight:900;font-size:13px}
+.ms-game .crate-btn .crate-art{width:60px;height:60px;margin-top:-30px}
+.ms-game .crate-btn.shake .crate-art{animation:ms-shake .4s}
+@keyframes ms-shake{20%{transform:rotate(-8deg) scale(1.08)}40%{transform:rotate(8deg) scale(1.12)}60%{transform:rotate(-5deg)}80%{transform:rotate(3deg)}}
+.ms-game .charges{display:flex;gap:3px;margin-top:2px}
+.ms-game .charges i{width:9px;height:9px;border-radius:3px;background:#8a3a12;border:1.5px solid var(--ink)}
+.ms-game .charges i.on{background:#b5f57a}
+.ms-game .crate-timer{font-size:10px;margin-top:2px;opacity:.95}
+.ms-game .g-side{position:absolute;left:0;right:0;bottom:0;z-index:30;max-height:80%;overflow:auto;background:var(--paper);border-top:4px solid var(--ink);border-radius:26px 26px 0 0;
+  padding:12px 14px 18px;transform:translateY(105%);transition:transform .35s cubic-bezier(.2,1.2,.4,1)}
+.ms-game.sheet-open .g-side{transform:none}
+.ms-game .sheet-backdrop{position:absolute;inset:0;z-index:29;background:rgba(40,20,8,.45);opacity:0;pointer-events:none;transition:opacity .25s}
+.ms-game.sheet-open .sheet-backdrop{opacity:1;pointer-events:auto}
+.ms-game .sheet-head{display:flex;justify-content:center;margin:-4px 0 6px}
+.ms-game .sheet-head i{width:44px;height:5px;border-radius:9px;background:#d8bfa0}
+.ms-game .g-side .panel{display:none}
+.ms-game[data-sheet=quest] .panel[data-panel=quest],.ms-game[data-sheet=codex] .panel[data-panel=codex]{display:block}
+.ms-game .panel{background:#fffdf7;border:3px solid var(--ink);border-radius:20px;box-shadow:0 4px 0 var(--ink);padding:0 14px 14px;position:relative}
+.ms-game .ribbon{position:relative;margin:-3px -17px 12px;padding:8px 16px;background:linear-gradient(#ffa24c,#f97316);border:3px solid var(--ink);border-radius:20px 20px 12px 12px;color:#fff;font-weight:900;font-size:16px;display:flex;align-items:center;justify-content:space-between}
+.ms-game .ribbon small{font-size:11px;background:rgba(0,0,0,.18);padding:1px 8px;border-radius:999px;text-shadow:none}
+.ms-game .quest-track{position:relative;display:flex;align-items:center;justify-content:space-between;padding:4px 2px 6px}
+.ms-game .quest-line{position:absolute;left:24px;right:58px;top:50%;height:10px;transform:translateY(-50%);background:#ead9c3;border:2px solid var(--ink);border-radius:9px;overflow:hidden}
+.ms-game .quest-line i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(#b5f57a,#46b52f);transition:width .6s}
+.ms-game .q-node{position:relative;width:46px;height:46px;border-radius:50%;background:#fff3df;border:3px solid var(--ink);overflow:hidden;z-index:1}
+.ms-game .q-node svg{width:100%;height:100%}
+.ms-game .q-node.done{border-color:#2f8f1f;box-shadow:0 0 0 3px #b5f57a}
+.ms-game .q-node .chk{position:absolute;inset:0;background:rgba(63,174,42,.55);display:none}
+.ms-game .q-node.done .chk{display:grid;place-items:center}
+.ms-game .q-node .chk svg{width:26px;height:26px}
+.ms-game .q-chest{position:relative;width:64px;height:64px;z-index:1}
+.ms-game .q-chest svg{width:100%;height:100%}
+.ms-game .q-chest.ready{animation:ms-chestReady 1s ease-in-out infinite}
+.ms-game .q-chest.ready::before{content:"";position:absolute;inset:-14px;border-radius:50%;background:repeating-conic-gradient(rgba(255,206,60,.8) 0 12deg,transparent 12deg 30deg);
+  -webkit-mask:radial-gradient(circle,#000 30%,transparent 70%);mask:radial-gradient(circle,#000 30%,transparent 70%);animation:ms-spin 5s linear infinite;z-index:-1}
+@keyframes ms-chestReady{50%{transform:translateY(-5px) rotate(-4deg)}}
+.ms-game .q-chest.opening{animation:ms-chestOpen .6s ease-out}
+@keyframes ms-chestOpen{30%{transform:scale(1.3,.8)}60%{transform:scale(.9,1.2) translateY(-8px)}}
+.ms-game .q-desc{font-size:13px;font-weight:700;margin:6px 0 0;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.ms-game .q-desc svg{width:16px;height:16px}
+.ms-game .btn-big{all:unset;box-sizing:border-box;display:block;width:100%;text-align:center;margin-top:10px;padding:9px 12px;border-radius:14px;border:3px solid var(--ink);box-shadow:0 4px 0 var(--ink);
+  background:linear-gradient(#93e861,#3fae2a);color:#fff;font-weight:900;font-size:15px;cursor:pointer;text-shadow:0 1px 0 #1f6b14}
+.ms-game .btn-big:disabled,.ms-game .btn-big.disabled{background:#e7ddd0;color:#8a7461;text-shadow:none;cursor:default}
+.ms-game .btn-big:active:not(.disabled){transform:translateY(3px);box-shadow:0 1px 0 var(--ink)}
+.ms-game .fineprint{display:block;margin-top:8px;font-size:11px;color:#8a6a52;line-height:1.6}
+.ms-game .codex-row{display:flex;align-items:center;gap:6px;margin-top:8px}
+.ms-game .codex-row .lbl{width:38px;font-size:12px;font-weight:900;flex:none}
+.ms-game .codex-row .cells{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;flex:1}
+.ms-game .cx{position:relative;aspect-ratio:1;border-radius:10px;background:#fff3df;box-shadow:inset 0 -3px 0 #f1d3a8;padding:3px}
+.ms-game .cx svg{width:100%;height:100%}
+.ms-game .cx.locked svg{filter:brightness(0);opacity:.13}
+.ms-game .cx.locked::after{content:"?";position:absolute;inset:0;display:grid;place-items:center;font-weight:900;color:#c9a57f;font-size:14px}
+.ms-game .cx.fresh{animation:ms-pop .6s}
+.ms-game .codex-row.chain-locked .cells{opacity:.45}
+.ms-game .codex-row .lockmsg{font-size:10px;font-weight:900;color:#a0785a}
+.ms-game .codex-count{font-size:12px;font-weight:900}
+.ms-game .fx{position:absolute;inset:0;z-index:50;pointer-events:none;overflow:hidden}
+.ms-game .flyer{position:absolute;will-change:transform}
+.ms-game .flyer svg{width:100%;height:100%;filter:drop-shadow(0 6px 4px rgba(74,44,26,.3))}
+.ms-game .burst{position:absolute;width:0;height:0}
+.ms-game .burst .ring{position:absolute;left:-40px;top:-40px;width:80px;height:80px;border-radius:50%;border:6px solid #fff;box-shadow:0 0 14px #ffd23f,inset 0 0 14px #ffd23f;animation:ms-ring .6s ease-out forwards}
+.ms-game .burst .flash{position:absolute;left:-50px;top:-50px;width:100px;height:100px;border-radius:50%;background:radial-gradient(circle,#fff 0,rgba(255,240,170,.85) 30%,transparent 65%);animation:ms-flash .45s ease-out forwards}
+.ms-game .burst .p{position:absolute;left:-8px;top:-8px;width:16px;height:16px;color:var(--c);animation:ms-pfly .75s cubic-bezier(.15,.8,.3,1) forwards}
+.ms-game .burst .p svg{width:100%;height:100%}
+.ms-game .burst.big .ring{left:-60px;top:-60px;width:120px;height:120px}
+@keyframes ms-ring{from{transform:scale(.2);opacity:1}to{transform:scale(1.5);opacity:0}}
+@keyframes ms-flash{from{transform:scale(.4);opacity:1}to{transform:scale(1.3);opacity:0}}
+@keyframes ms-pfly{from{transform:translate(0,0) scale(.3) rotate(0)}70%{opacity:1}to{transform:translate(var(--dx),var(--dy)) scale(var(--s)) rotate(var(--r));opacity:0}}
+.ms-game .ftext{position:absolute;transform:translate(-50%,-50%);font-weight:900;color:#fff;font-size:16px;white-space:nowrap;animation:ms-ftext 1.1s ease-out forwards}
+.ms-game .ftext.gold{color:#ffe066}
+@keyframes ms-ftext{0%{transform:translate(-50%,-30%) scale(.5);opacity:0}20%{transform:translate(-50%,-80%) scale(1.15);opacity:1}100%{transform:translate(-50%,-200%) scale(1);opacity:0}}
+.ms-game .toast{position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);background:rgba(58,30,12,.88);color:#fff;font-weight:900;font-size:14px;padding:10px 18px;border-radius:999px;border:2px solid #fff;white-space:nowrap;animation:ms-toast 1.8s ease forwards}
+@keyframes ms-toast{0%{opacity:0;transform:translate(-50%,-30%)}12%,80%{opacity:1;transform:translate(-50%,-50%)}100%{opacity:0}}
+.ms-game .overlay{position:absolute;inset:0;z-index:60;display:grid;place-items:center;background:rgba(40,18,6,.62);animation:ms-fadeIn .25s;pointer-events:auto;overflow:hidden}
+@keyframes ms-fadeIn{from{opacity:0}}
+.ms-game .rays{position:absolute;left:50%;top:44%;width:900px;height:900px;margin:-450px 0 0 -450px;border-radius:50%;
+  background:repeating-conic-gradient(rgba(255,214,90,.55) 0 9deg,transparent 9deg 24deg);-webkit-mask:radial-gradient(circle,#000 10%,transparent 60%);mask:radial-gradient(circle,#000 10%,transparent 60%);animation:ms-spin 12s linear infinite}
+.ms-game .ov-card{position:relative;width:min(330px,86%);text-align:center;animation:ms-cardIn .6s cubic-bezier(.3,1.6,.5,1)}
+@keyframes ms-cardIn{from{transform:scale(.3) translateY(40px);opacity:0}}
+.ms-game .ov-title{font-size:30px;font-weight:900;color:#ffe066;letter-spacing:.06em}
+.ms-game .ov-sub{color:#fff;font-weight:900;font-size:14px;margin-top:2px}
+.ms-game .ov-hero{position:relative;width:170px;height:170px;margin:8px auto 4px}
+.ms-game .ov-hero svg{width:100%;height:100%;filter:drop-shadow(0 8px 0 rgba(0,0,0,.25))}
+.ms-game .ov-hero .lvtag{position:absolute;left:50%;bottom:-2px;transform:translateX(-50%);background:linear-gradient(#ffa24c,#f97316);color:#fff;font-weight:900;font-size:22px;padding:2px 18px;border:3px solid var(--ink);border-radius:999px;box-shadow:0 3px 0 var(--ink);white-space:nowrap}
+.ms-game .ov-perks{list-style:none;margin:16px 0 0;padding:12px 14px;background:#fffaf1;border:3px solid var(--ink);border-radius:18px;box-shadow:0 4px 0 var(--ink);text-align:left;font-size:13.5px;font-weight:900;line-height:1.5}
+.ms-game .ov-perks li{display:flex;gap:8px;align-items:flex-start;padding:4px 0}
+.ms-game .ov-perks li+li{border-top:2px dashed #ecd7bb}
+.ms-game .ov-perks li svg{width:18px;height:18px;flex:none;margin-top:1px}
+.ms-game .ov-card .btn-big{margin-top:14px;background:linear-gradient(#ffb15c,#f97316);text-shadow:0 1px 0 #9a3a0a}
+.ms-game .confetti i{position:absolute;top:-20px;width:10px;height:16px;border-radius:2px;border:1.5px solid rgba(74,44,26,.6);animation:ms-confetti linear forwards}
+@keyframes ms-confetti{to{transform:translateY(1000px) rotate(var(--r))}}
+.ms-game .unlock .ov-card{width:min(250px,80%)}
+.ms-game .unlock-tag{display:inline-block;background:#ef4444;color:#fff;font-weight:900;font-size:13px;padding:3px 14px;border-radius:999px;border:2px solid #fff;transform:rotate(-4deg)}
+.ms-game .unlock-name{font-size:26px;font-weight:900;color:#fff}
+.ms-game .unlock-meta{color:#ffe7c2;font-weight:900;font-size:12px}
+@container msgame (min-width:860px){
+.ms-game .g-hud{padding:12px 24px 14px}
+.ms-game .hud-title{font-size:20px}
+.ms-game .xpbar{width:220px}
+.ms-game .pill{font-size:19px;min-width:110px;padding-right:16px}
+.ms-game .pill svg{width:34px;height:34px}
+.ms-game .scene{height:274px}
+.ms-game .customers{justify-content:center;gap:120px;bottom:40px}
+.ms-game .cust{width:auto;max-width:none}
+.ms-game .cust-avatar{width:132px;height:143px;margin-bottom:-22px}
+.ms-game .bubble{padding:9px 12px 9px 9px;gap:10px;border-radius:18px}
+.ms-game .bub-art{width:66px;height:66px}
+.ms-game .bub-name{font-size:16px}
+.ms-game .bub-reward{font-size:13px}
+.ms-game .btn-serve{font-size:14px;padding:4px 14px}
+.ms-game .counter{height:44px}
+.ms-game .counter .register{left:7%;width:84px;height:62px;bottom:24px}
+.ms-game .counter .jar{right:7%;width:58px;height:58px;bottom:26px}
+.ms-game .g-main{display:grid;grid-template-columns:150px minmax(0,1fr) 330px;gap:22px;padding:16px 24px 0;align-items:start}
+.ms-game .g-center{order:2}
+.ms-game .tray{margin:0 auto;max-width:452px;width:100%}
+.ms-game .dock{order:1;flex-direction:column;align-items:stretch;padding:28px 0 0;gap:16px}
+.ms-game .dock [data-open]{display:none}
+.ms-game .crate-btn{flex:none;padding-bottom:10px;font-size:15px}
+.ms-game .crate-btn .crate-art{width:104px;height:104px;margin-top:-40px}
+.ms-game .dock-btn{flex:none;padding:10px 4px;font-size:14px}
+.ms-game .dock-btn svg{width:46px;height:46px}
+.ms-game .dock-btn small{font-size:12px}
+.ms-game .tip{display:block}
+.ms-game .g-side{order:3;position:static;transform:none;max-height:none;overflow:visible;background:none;border:0;border-radius:0;padding:0;display:flex;flex-direction:column;gap:18px;transition:none}
+.ms-game .g-side .panel{display:block}
+.ms-game .sheet-head,.ms-game .sheet-backdrop{display:none}
+
+}
+.ms-game .tip{display:none;background:#fffaf1;border:3px dashed #d9b48a;border-radius:16px;padding:10px;font-size:12px;font-weight:700;line-height:1.6;color:#7a5a44}
+@media (prefers-reduced-motion:reduce){
+.ms-game *{animation-duration:.01ms!important;animation-iteration-count:1!important}
+}
+
+
+/* 正式整合補充：外框、手機滿版、長訊息換行與鍵盤焦點 */
+.ms-game{border:3px solid var(--ink);border-radius:22px;box-shadow:0 10px 30px rgba(74,44,26,.18)}
+@media (max-width:640px){.ms-game{margin-left:-1rem;margin-right:-1rem;width:calc(100% + 2rem);border-radius:0;border-left:0;border-right:0}}
+.ms-game>.toast{z-index:55;max-width:88%;white-space:normal;text-align:center;pointer-events:none}
+.ms-game .tile:focus-visible,.ms-game .dock-btn:focus-visible,.ms-game .crate-btn:focus-visible,.ms-game .btn-big:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
+.ms-game.is-busy .board{cursor:progress}
+.ms-game .btn-serve{font-family:inherit}
+
+/* 網站底部導覽列在 md（768px）以下固定在畫面底部，約 64px 加安全區。
+   網站外層是 overflow-x:hidden，sticky 會失效，所以棋盤在畫面上時由程式把操作列改成 fixed（.pinned）。
+   手機寬度用不到三欄 container query；拿掉 container-type 後 fixed 才會以視窗定位，isolation 保留原本的圖層隔離。
+   .dock 的 bottom 也是程式判斷何時固定的基準線。 */
+.ms-game .dock-slot{display:contents}
+@media (max-width:767px){
+.ms-game{container-type:normal;isolation:isolate;scroll-margin-bottom:calc(72px + env(safe-area-inset-bottom))}
+.ms-game .dock-slot{display:block}
+.ms-game .dock{bottom:calc(64px + env(safe-area-inset-bottom))}
+.ms-game .dock.pinned{position:fixed;z-index:12;padding-top:16px;background:linear-gradient(rgba(255,214,161,0),#ffd6a1 22px)}
+}
+
+/* 點數商城遊戲場景：店內牆面淡出，露出場景 */
+.ms-game .scene.has-perk-scene .scene-bg{opacity:.4}

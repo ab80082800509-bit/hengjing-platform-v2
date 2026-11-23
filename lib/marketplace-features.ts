@@ -1,4 +1,7 @@
 import { supabase } from '@/lib/supabase'
+import type { EquippedPerks } from '@/lib/rewards/perk-catalog'
+import { parseEquippedPerks } from '@/lib/rewards/perk-snapshot'
+import { CHAT_FILE_BUCKET, chatFileRefusal, resolveChatFileMime } from '@/lib/chat-files'
 
 export const MEMBER_AVATAR_BUCKET = 'member-avatars'
 export const STORE_MEDIA_BUCKET = 'store-media'
@@ -43,6 +46,9 @@ export type PublicReview = {
   reply?: string
   repliedAt?: string
   photos: string[]
+  equipped?: EquippedPerks
+  /** 評價者公開展示的遊戲成就；沒有選擇時不出現。 */
+  gameBadge?: string
 }
 
 export type MyReview = {
@@ -357,6 +363,8 @@ export async function fetchPublicReviews(ids: string[]): Promise<PublicReview[]>
       reply: typeof row.seller_reply === 'string' ? row.seller_reply : undefined,
       repliedAt: typeof row.seller_replied_at === 'string' ? row.seller_replied_at : undefined,
       photos: asArray(row.photos).map((path) => reviewPhotoUrl(String(path))).filter(Boolean),
+      equipped: parseEquippedPerks(row.equipped),
+      gameBadge: typeof row.game_badge === 'string' && /^[a-z0-9_]{3,40}$/.test(row.game_badge) ? row.game_badge : undefined,
     }]
   })
 }
@@ -703,12 +711,20 @@ export type SellerChatThread = {
   unread: number
 }
 
+export type SellerChatFile = {
+  path: string
+  name: string
+  bytes: number
+  mime: string
+}
+
 export type SellerChatMessage = {
   id: string
   chatId: string
   senderId: string
   body: string
   createdAt: string
+  file: SellerChatFile | null
 }
 
 function mapChat(value: unknown): SellerChatThread | null {
@@ -731,6 +747,17 @@ function mapChat(value: unknown): SellerChatThread | null {
   }
 }
 
+function mapChatFile(value: unknown): SellerChatFile | null {
+  const row = asRecord(value)
+  if (!row || typeof row.path !== 'string' || typeof row.mime !== 'string') return null
+  return {
+    path: row.path,
+    name: String(row.name ?? '附件'),
+    bytes: Number(row.bytes ?? 0) || 0,
+    mime: row.mime,
+  }
+}
+
 function mapChatMessage(value: unknown): SellerChatMessage | null {
   const row = asRecord(value)
   if (!row || row.id == null) return null
@@ -740,7 +767,17 @@ function mapChatMessage(value: unknown): SellerChatMessage | null {
     senderId: String(row.sender_id ?? ''),
     body: String(row.body ?? ''),
     createdAt: String(row.created_at ?? ''),
+    file: mapChatFile(row.file),
   }
+}
+
+function chatStorageError(error: RpcError, fallback: string): string {
+  const msg = error?.message ?? ''
+  if (/maximum|exceed|too large|entity too large|payload too large/i.test(msg)) return '單檔上限 8MB'
+  if (/mime|content.type|invalid file type|not allowed/i.test(msg)) return '只支援 JPG、PNG、WEBP 照片或 PDF 檔案'
+  if (/row-level security|unauthorized|permission/i.test(msg)) return '不能在這則對話上傳附件'
+  if (/jwt|not authenticated/i.test(msg)) return '請先登入'
+  return dbError(error, fallback)
 }
 
 export async function fetchSellerChats(): Promise<{ chats: SellerChatThread[]; error: string }> {
@@ -758,13 +795,67 @@ export async function openSellerChat(sellerUserId: string, productId?: string | 
   return { id: String(data), error: '' }
 }
 
-export async function fetchSellerChatMessages(chatId: string): Promise<{ messages: SellerChatMessage[]; error: string }> {
-  const { data, error } = await supabase.rpc('list_seller_chat_messages', { p_chat_id: chatId })
+export async function fetchSellerChatMessages(chatId: string, before?: string): Promise<{ messages: SellerChatMessage[]; error: string }> {
+  const args: { p_chat_id: string; p_before?: string } = { p_chat_id: chatId }
+  if (before) args.p_before = before
+  const { data, error } = await supabase.rpc('list_seller_chat_messages', args)
   if (error) return { messages: [], error: dbError(error, '讀取訊息失敗') }
   return {
     messages: asArray(data).flatMap((item) => { const message = mapChatMessage(item); return message ? [message] : [] }),
     error: '',
   }
+}
+
+export async function uploadSellerChatFile(chatId: string, file: File): Promise<{ path: string | null; error: string }> {
+  const refusal = chatFileRefusal(file)
+  if (refusal) return { path: null, error: refusal }
+  const mime = resolveChatFileMime(file)
+  const { data: auth } = await supabase.auth.getUser()
+  const uid = auth.user?.id
+  if (!uid) return { path: null, error: '請先登入' }
+  const path = `${chatId}/${uid}/${crypto.randomUUID()}`
+  const { error } = await supabase.storage.from(CHAT_FILE_BUCKET).upload(path, file, {
+    contentType: mime,
+    upsert: false,
+  })
+  if (error) {
+    await supabase.storage.from(CHAT_FILE_BUCKET).remove([path])
+    return { path: null, error: chatStorageError(error, '上傳失敗') }
+  }
+  return { path, error: '' }
+}
+
+export async function removeUnsentChatFile(path: string): Promise<string> {
+  const { error } = await supabase.storage.from(CHAT_FILE_BUCKET).remove([path])
+  if (!error) return ''
+  if (/not found|not exist/i.test(error.message ?? '')) return ''
+  return chatStorageError(error, '取消附件失敗')
+}
+
+export async function sendSellerChatFile(
+  chatId: string,
+  path: string,
+  name: string,
+  claimKey: string,
+): Promise<{ message: SellerChatMessage | null; error: string }> {
+  const { data, error } = await supabase.rpc('send_seller_chat_file', {
+    p_chat_id: chatId,
+    p_path: path,
+    p_name: name,
+    p_claim_key: claimKey,
+  })
+  if (error) return { message: null, error: dbError(error, '傳送失敗') }
+  return { message: mapChatMessage(data), error: '' }
+}
+
+export async function signedChatFileUrl(path: string, downloadName?: string): Promise<{ url: string | null; error: string }> {
+  const { data, error } = await supabase.storage.from(CHAT_FILE_BUCKET).createSignedUrl(
+    path,
+    120,
+    downloadName ? { download: downloadName } : undefined,
+  )
+  if (error || !data?.signedUrl) return { url: null, error: chatStorageError(error, '無法讀取附件') }
+  return { url: data.signedUrl, error: '' }
 }
 
 export async function sendSellerChatMessage(chatId: string, body: string): Promise<{ message: SellerChatMessage | null; error: string }> {

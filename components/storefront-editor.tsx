@@ -210,12 +210,12 @@ export function StorefrontEditor({
         <p className="text-sm font-black">賣場名稱<span className="ml-2 font-bold text-muted-foreground">{storeName}</span></p>
         <label className="block text-sm font-black">
           賣場封面
-          <input type="file" accept="image/jpeg,image/png,image/webp" className="mt-2 block w-full text-sm" onChange={(e) => void upload(e.target.files?.[0], 'banner')} />
+          <input type="file" accept="image/jpeg,image/png,image/webp" className="mt-2 block w-full max-w-full text-sm" onChange={(e) => void upload(e.target.files?.[0], 'banner')} />
         </label>
         {draft.bannerUrl && <img src={draft.bannerUrl} alt="" className="h-24 w-full rounded-xl object-cover" />}
         <label className="block text-sm font-black">
           賣場 Logo
-          <input type="file" accept="image/jpeg,image/png,image/webp" className="mt-2 block w-full text-sm" onChange={(e) => void upload(e.target.files?.[0], 'logo')} />
+          <input type="file" accept="image/jpeg,image/png,image/webp" className="mt-2 block w-full max-w-full text-sm" onChange={(e) => void upload(e.target.files?.[0], 'logo')} />
         </label>
         {draft.logoUrl && <img src={draft.logoUrl} alt="" className="size-16 rounded-xl object-cover" />}
         <p className="flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3.5" />JPG、PNG、WEBP，單張 5MB 以內，存放於 store-media。商品分類圖片仍使用 product-images。</p>
@@ -255,10 +255,10 @@ export function StorefrontEditor({
             {publicProducts.map((item) => {
               const index = draft.featuredIds.indexOf(item.id)
               return (
-                <li key={item.id} className="flex items-center gap-2 rounded-xl border border-border/70 px-3 py-2">
-                  <button type="button" aria-pressed={index >= 0} onClick={() => toggleFeatured(item.id)} className="text-xs font-bold text-brand-ink">{index >= 0 ? '已選' : '選取'}</button>
-                  <span className="min-w-0 flex-1 truncate text-sm">{item.name}</span>
-                  <span className="text-xs text-muted-foreground">{item.priceLabel}</span>
+                <li key={item.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-border/70 px-3 py-2">
+                  <button type="button" aria-pressed={index >= 0} onClick={() => toggleFeatured(item.id)} className="shrink-0 text-xs font-bold text-brand-ink">{index >= 0 ? '已選' : '選取'}</button>
+                  <span className="min-w-32 flex-1 break-words text-sm">{item.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{item.priceLabel}</span>
                   {index >= 0 && (
                     <>
                       <button type="button" onClick={() => moveFeatured(item.id, -1)} className="text-xs">上移</button>

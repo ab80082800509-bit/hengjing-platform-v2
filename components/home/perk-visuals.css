@@ -1,0 +1,312 @@
+/* 第七階段第 9 批：點數商城新分類的實際外觀。只用 CSS 與內嵌 SVG，沒有外部素材。 */
+
+/* ---------- 聊天氣泡 ---------- */
+.pv-bubble {
+  position: relative;
+  isolation: isolate;
+}
+.pv-bubble-milktea {
+  background: linear-gradient(180deg, #f6e2c4, #e9c99d) !important;
+  color: #4a2c12 !important;
+  border: 1px solid #c79a64 !important;
+  padding-bottom: 14px !important;
+  overflow: hidden;
+}
+.pv-bubble-milktea::after {
+  content: '';
+  position: absolute;
+  inset: auto 8px 3px 8px;
+  height: 8px;
+  background: radial-gradient(circle, #3b2412 0 2.6px, transparent 3px) 0 50% / 12px 8px repeat-x;
+  animation: pv-pearl 2.4s ease-in-out infinite;
+  z-index: -1;
+}
+.pv-bubble-milktea p:last-child {
+  color: rgb(74 44 18 / 0.7) !important;
+}
+@keyframes pv-pearl {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.pv-bubble-memo {
+  background: #fde68a !important;
+  color: #3f3a1a !important;
+  border: none !important;
+  border-radius: 4px !important;
+  transform: rotate(-1.2deg);
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.18);
+  padding-top: 14px !important;
+}
+.pv-bubble-memo::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 46px;
+  height: 14px;
+  translate: -50% 0;
+  rotate: 3deg;
+  background: repeating-linear-gradient(45deg, rgb(255 255 255 / 0.75) 0 5px, rgb(251 113 133 / 0.55) 5px 10px);
+}
+.pv-bubble-memo p:last-child {
+  color: rgb(63 58 26 / 0.65) !important;
+}
+.pv-bubble-neon {
+  background: #0b1020 !important;
+  color: #e0f2fe !important;
+  border: 1px solid transparent !important;
+  background-clip: padding-box;
+}
+.pv-bubble-neon::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  background: conic-gradient(from var(--pv-a, 0deg), #22d3ee, #a855f7, #ec4899, #22d3ee);
+  animation: pv-neon-spin 3s linear infinite;
+}
+.pv-bubble-neon::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: #0b1020;
+}
+.pv-bubble-neon p:last-child {
+  color: rgb(186 230 253 / 0.75) !important;
+}
+@property --pv-a {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes pv-neon-spin {
+  to { --pv-a: 360deg; }
+}
+
+/* ---------- 寵物 ---------- */
+.pv-pet {
+  display: inline-block;
+  transform-origin: 50% 100%;
+}
+.pv-pet-cat { animation: pv-pet-hop 2.6s ease-in-out infinite; }
+.pv-pet-shiba { animation: pv-pet-nod 1.8s ease-in-out infinite; }
+.pv-pet-penguin { animation: pv-pet-waddle 1.2s ease-in-out infinite; }
+.pv-pet .pv-tail { transform-origin: 8px 30px; animation: pv-tail 0.9s ease-in-out infinite alternate; }
+.pv-pet .pv-eye { animation: pv-blink 4s steps(1) infinite; transform-origin: center; transform-box: fill-box; }
+.pv-pet .pv-flip { transform-origin: 32px 34px; transform-box: view-box; animation: pv-wave 1.2s ease-in-out infinite alternate; }
+@keyframes pv-pet-hop { 0%, 70%, 100% { transform: translateY(0); } 80% { transform: translateY(-4px); } 90% { transform: translateY(0) scaleY(0.94); } }
+@keyframes pv-pet-nod { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-5deg); } }
+@keyframes pv-pet-waddle { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+@keyframes pv-tail { from { transform: rotate(-14deg); } to { transform: rotate(16deg); } }
+@keyframes pv-blink { 0%, 92%, 100% { transform: scaleY(1); } 94% { transform: scaleY(0.1); } }
+@keyframes pv-wave { from { transform: rotate(0); } to { transform: rotate(-24deg); } }
+
+/* ---------- 遊戲場景 ---------- */
+.pv-scene {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: -1;
+  container-type: size;
+}
+.pv-scene.is-dim { opacity: 0.5; }
+.pv-scene-sakura { background: linear-gradient(180deg, #fde2ec 0%, #fbcfe8 45%, #f9a8d4 100%); }
+.pv-scene-harbor { background: linear-gradient(180deg, #fb923c 0%, #fdba74 38%, #f472b6 58%, #1e3a8a 60%, #1e40af 100%); }
+.pv-scene-night { background: radial-gradient(circle at 20% 10%, #312e81, transparent 55%), linear-gradient(180deg, #0f172a, #1e1b4b 70%, #3b0764); }
+.pv-scene svg { position: absolute; inset: auto 0 0 0; width: 100%; height: 55%; }
+.pv-fall {
+  position: absolute;
+  top: -12px;
+  animation: pv-fall linear infinite;
+}
+@keyframes pv-fall {
+  from { transform: translate(0, 0) rotate(0); }
+  to { transform: translate(var(--pv-dx, 30px), 110cqh) rotate(300deg); }
+}
+.pv-wave-line { animation: pv-wave-x 5s ease-in-out infinite alternate; }
+@keyframes pv-wave-x { from { transform: translateX(-12px); } to { transform: translateX(12px); } }
+.pv-twinkle { animation: pv-twinkle 2.2s ease-in-out infinite; }
+@keyframes pv-twinkle { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+/* 場景畫在宿主自己的背景之上、內容之下 */
+.pv-scene-host {
+  position: relative;
+  isolation: isolate;
+}
+
+/* ---------- 方塊棋盤 ---------- */
+.pv-board-wood {
+  --pv-board-bg: repeating-linear-gradient(90deg, #a16207 0 9px, #b45309 9px 11px, #92400e 11px 22px), #a16207;
+  --pv-board-cell: rgb(254 243 199 / 0.22);
+  --pv-board-edge: #78350f;
+}
+.pv-board-arcade {
+  --pv-board-bg: linear-gradient(180deg, transparent 0 48%, rgb(34 211 238 / 0.18) 50%, transparent 52%) 0 0 / 100% 200%, #0b1020;
+  --pv-board-cell: rgb(34 211 238 / 0.14);
+  --pv-board-edge: #a855f7;
+}
+.pv-board-jade {
+  --pv-board-bg: radial-gradient(circle at 30% 20%, rgb(255 255 255 / 0.25), transparent 40%), linear-gradient(135deg, #065f46, #047857 45%, #064e3b);
+  --pv-board-cell: rgb(209 250 229 / 0.16);
+  --pv-board-edge: #d4a017;
+}
+.pv-board {
+  background: var(--pv-board-bg) !important;
+  box-shadow: 0 0 0 3px var(--pv-board-edge), 0 8px 24px rgb(0 0 0 / 0.25) !important;
+}
+.pv-board.pv-board-arcade { animation: pv-scan 4s linear infinite; }
+@keyframes pv-scan { from { background-position: 0 0, 0 0; } to { background-position: 0 -200%, 0 0; } }
+
+/* ---------- 個人頁特效 ---------- */
+.pv-effect {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  container-type: size;
+  z-index: 2;
+}
+.pv-effect-click {
+  pointer-events: auto;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+.pv-rise {
+  position: absolute;
+  bottom: -16px;
+  animation: pv-rise ease-in infinite;
+}
+@keyframes pv-rise {
+  from { transform: translateY(0) scale(0.8); opacity: 0; }
+  15% { opacity: 1; }
+  to { transform: translateY(-110cqh) scale(1.1); opacity: 0; }
+}
+.pv-burst {
+  position: absolute;
+  animation: pv-burst 0.9s ease-out forwards;
+}
+@keyframes pv-burst {
+  from { transform: translate(-50%, -50%) scale(0.4); opacity: 1; }
+  to { transform: translate(calc(-50% + var(--pv-bx)), calc(-50% + var(--pv-by))) scale(1); opacity: 0; }
+}
+
+/* ---------- 節慶收藏徽章 ---------- */
+.pv-emblem { display: inline-block; vertical-align: middle; }
+.pv-emblem .pv-sway { transform-origin: 50% 90%; transform-box: fill-box; animation: pv-pet-waddle 1.6s ease-in-out infinite; }
+.pv-emblem .pv-shine { animation: pv-twinkle 1.8s ease-in-out infinite; }
+
+/* ---------- 商店街裝潢 ---------- */
+.pv-decor-balloon .pv-float { animation: pv-float 2.8s ease-in-out infinite; transform-box: fill-box; }
+.pv-decor-balloon .pv-float:nth-child(2n) { animation-delay: -1.2s; }
+@keyframes pv-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+.pv-decor-neon .pv-neon-text { animation: pv-flicker 2.4s steps(1) infinite; }
+@keyframes pv-flicker { 0%, 100% { opacity: 1; } 40% { opacity: 0.55; } 44% { opacity: 1; } 72% { opacity: 0.7; } 75% { opacity: 1; } }
+.pv-decor-fountain .pv-spray { transform-box: fill-box; transform-origin: 50% 100%; animation: pv-spray 1.4s ease-in-out infinite; }
+.pv-decor-fountain .pv-spray:nth-child(2) { animation-delay: -0.5s; }
+.pv-decor-fountain .pv-spray:nth-child(3) { animation-delay: -0.9s; }
+@keyframes pv-spray { 0%, 100% { transform: scaleY(0.75); opacity: 0.7; } 50% { transform: scaleY(1.08); opacity: 1; } }
+
+/* ---------- 動態貼圖 ---------- */
+.pv-sticker {
+  position: relative;
+  display: inline-grid;
+  place-items: end center;
+  width: 112px;
+  height: 120px;
+  border-radius: 18px;
+  background: radial-gradient(circle at 50% 70%, rgb(255 255 255 / 0.9), rgb(255 247 237 / 0.6) 60%, transparent 72%);
+}
+.pv-sticker.sm { width: 64px; height: 70px; }
+.pv-sticker-body {
+  position: relative;
+  width: 62%;
+  height: 86%;
+  transform-origin: 50% 100%;
+}
+.pv-sticker-body img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: bottom;
+}
+.pv-sticker-body img:nth-child(2) { animation: pv-frame 0.7s steps(1) infinite; }
+@keyframes pv-frame { 0% { opacity: 0; } 50% { opacity: 1; } }
+.pv-m-bounce { animation: pv-m-bounce 0.9s ease-in-out infinite; }
+.pv-m-nod { animation: pv-m-nod 1s ease-in-out infinite; }
+.pv-m-jump { animation: pv-m-jump 1.1s cubic-bezier(.3,.7,.4,1) infinite; }
+.pv-m-sway { animation: pv-m-sway 2s ease-in-out infinite; }
+.pv-m-wave { animation: pv-m-wave 0.8s ease-in-out infinite alternate; }
+.pv-m-spin { animation: pv-m-spin 2.2s ease-in-out infinite; }
+@keyframes pv-m-bounce { 0%, 100% { transform: translateY(0) scaleY(1); } 40% { transform: translateY(-8%) scaleY(1.03); } 80% { transform: translateY(0) scaleY(0.95); } }
+@keyframes pv-m-nod { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(5deg) translateY(2%); } 60% { transform: rotate(0); } }
+@keyframes pv-m-jump { 0%, 100% { transform: translateY(0); } 45% { transform: translateY(-16%); } 70% { transform: translateY(0) scaleY(0.92); } }
+@keyframes pv-m-sway { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
+@keyframes pv-m-wave { from { transform: rotate(-4deg) translateX(-3%); } to { transform: rotate(4deg) translateX(3%); } }
+@keyframes pv-m-spin { 0%, 60%, 100% { transform: rotateY(0); } 80% { transform: rotateY(180deg); } }
+.pv-sticker-prop {
+  position: absolute;
+  top: 6%;
+  right: 4%;
+  width: 34%;
+  animation: pv-prop 1.4s ease-in-out infinite;
+}
+@keyframes pv-prop { 0%, 100% { transform: translateY(0) rotate(-8deg) scale(1); } 50% { transform: translateY(-10%) rotate(8deg) scale(1.08); } }
+.pv-sticker-cap {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  translate: -50% 0;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 2px solid #3b2412;
+  background: #fff7ed;
+  color: #3b2412;
+  font-weight: 900;
+  font-size: 12px;
+  box-shadow: 0 2px 0 #3b2412;
+  animation: pv-cap 1.8s ease-in-out infinite;
+}
+.pv-sticker.sm .pv-sticker-cap { font-size: 9px; padding: 0 5px; border-width: 1.5px; }
+@keyframes pv-cap { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+.pv-pay-frame {
+  display: inline-block;
+  width: 96px;
+  height: 96px;
+  background-repeat: no-repeat;
+  background-size: 200% 100%;
+  background-position: left center;
+  animation: pv-pay-frame 0.8s steps(1) infinite;
+}
+.pv-pay-frame.sm { width: 72px; height: 72px; }
+@keyframes pv-pay-frame {
+  0%, 49% { background-position: left center; }
+  50%, 100% { background-position: right center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-bubble-milktea::after,
+  .pv-bubble-neon::before,
+  .pv-pet,
+  .pv-pet *,
+  .pv-fall,
+  .pv-wave-line,
+  .pv-twinkle,
+  .pv-board.pv-board-arcade,
+  .pv-rise,
+  .pv-emblem *,
+  .pv-decor-balloon *,
+  .pv-decor-neon *,
+  .pv-decor-fountain *,
+  .pv-sticker *,
+  .pv-sticker-body img:nth-child(2),
+  .pv-pay-frame {
+    animation: none !important;
+  }
+}

@@ -90,39 +90,55 @@ export function BuyerProfileHeader({
   tone,
   avatar,
   completed,
+  completedError = false,
   onEdit,
   avatarNode,
   tags,
   skinStyle,
+  effect,
 }: {
   name: string
   tone: number
   avatar?: string
-  completed: number
+  completed: number | null
+  completedError?: boolean
   onEdit: () => void
   avatarNode?: ReactNode
   tags?: ReactNode
   skinStyle?: CSSProperties
+  /** 已裝備的個人頁特效。沒有裝備時不放。 */
+  effect?: ReactNode
 }) {
-  const level = memberLevel(completed)
+  const completedCount = typeof completed === 'number' ? completed : null
+  const level = memberLevel(completedCount ?? 0)
   const skinned = Boolean(skinStyle)
   return (
     <div
-      className={`flex min-w-0 items-center gap-3 border-b border-border/60 px-3 py-3 sm:px-6 sm:py-4 ${skinned ? 'text-zinc-50' : 'bg-muted/40'}`}
+      className={`relative flex min-w-0 items-center gap-3 overflow-hidden border-b border-border/60 px-3 py-3 sm:px-6 sm:py-4 ${skinned ? 'text-zinc-50' : 'bg-muted/40'}`}
       style={skinStyle}
     >
-      {avatarNode ?? <UserAvatar name={name} tone={tone} src={avatar} />}
-      <div className="min-w-0 flex-1">
+      {effect}
+      <span className="relative z-[3]">{avatarNode ?? <UserAvatar name={name} tone={tone} src={avatar} />}</span>
+      <div className="relative z-[3] min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="truncate text-base font-black">{name}</p>
           {tags}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2">
-          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-black ${level.cls}`}>{level.name}</span>
-          <span className={`text-xs ${skinned ? 'text-zinc-300' : 'text-muted-foreground'}`}>
-            {level.next ? `再完成 ${level.next.need} 筆訂單升級${level.next.name}` : '已達最高等級'}
-          </span>
+          {completedCount != null ? (
+            <>
+              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-black ${level.cls}`}>{level.name}</span>
+              <span className={`text-xs ${skinned ? 'text-zinc-300' : 'text-muted-foreground'}`}>
+                {completedCount != null && level.next ? `再完成 ${level.next.need} 筆訂單升級${level.next.name}` : '已達最高等級'}
+              </span>
+            </>
+          ) : (
+            <span className={`text-xs ${skinned ? 'text-zinc-300' : 'text-muted-foreground'}`}>
+              {completedError ? '已完成訂單數無法讀取，這不是 0 筆' : '已完成訂單數讀取中'}
+            </span>
+          )}
         </div>
+        {completedCount != null && (
         <div
           role="progressbar"
           aria-label="會員升級進度"
@@ -133,8 +149,9 @@ export function BuyerProfileHeader({
         >
           <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${level.progress}%` }} />
         </div>
+        )}
       </div>
-      <button type="button" onClick={onEdit} className={`${btnGhost} min-h-10 shrink-0 px-3 py-2 text-xs`}>
+      <button type="button" onClick={onEdit} className={`relative z-[3] ${btnGhost} min-h-10 shrink-0 px-3 py-2 text-xs`}>
         <Pencil className="size-3.5" />編輯
       </button>
     </div>
@@ -150,6 +167,7 @@ export function BuyerProfilePanel({
   canRename = true,
   nextRenameAt,
   completed,
+  completedError = false,
   onRename,
   onAvatar,
   onAvatarUpload,
@@ -167,7 +185,8 @@ export function BuyerProfilePanel({
   nicknameInitialized?: boolean
   canRename?: boolean
   nextRenameAt?: string | null
-  completed: number
+  completed: number | null
+  completedError?: boolean
   onRename: (next: string) => Promise<string | void> | string | void
   onAvatar: (i: number) => void
   onAvatarUpload: (dataUrl: string) => Promise<string | void> | string | void
@@ -180,7 +199,8 @@ export function BuyerProfilePanel({
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const wait = canRename ? 0 : Math.max(daysUntilRename(nameChangedAt, nicknameInitialized), 1)
-  const level = memberLevel(completed)
+  const completedCount = typeof completed === 'number' ? completed : null
+  const level = memberLevel(completedCount ?? 0)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -301,11 +321,11 @@ export function BuyerProfilePanel({
         <div>
           <h3 className="text-sm font-black">會員等級</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {level.name}・已完成 {completed} 筆訂單
+            {completedCount != null ? `${level.name}・已完成 ${completedCount} 筆訂單` : completedError ? '已完成訂單數無法讀取，這不是 0 筆' : '已完成訂單數讀取中'}
           </p>
         </div>
         <button type="button" onClick={onSwitchSeller} className={btnGhost}>
-          <Store className="size-4" />切換為賣家
+          <Store className="size-4" />前往賣家中心
         </button>
       </div>
     </section>

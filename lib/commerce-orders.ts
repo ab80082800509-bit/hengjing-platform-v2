@@ -1,3 +1,4 @@
+import { parseCompletedRemainingAmount, parseRefundAmount } from '@/lib/metric-amount'
 import { supabase } from '@/lib/supabase'
 
 export type BuyerOrderBucket = 'all' | 'unpaid' | 'toShip' | 'shipping' | 'done' | 'cancelled' | 'refund'
@@ -93,6 +94,10 @@ export type MetricOrder = {
   orderTotal: number
   buyerStage: string
   buyerStageLabel: string
+  refundId?: string
+  refundAmount?: number | null
+  refundCreatedAt?: string
+  completedRemainingAmount?: number | null
 }
 
 type RpcResult<T> = { data: T | null; error: string | null }
@@ -265,14 +270,23 @@ export async function sellerOrdersForMetric(metric: SellerMetric, from: string, 
       if (!item || typeof item !== 'object') return []
       const row = item as Record<string, unknown>
       if (typeof row.orderId !== 'string') return []
-      return [{
+      const order: MetricOrder = {
         orderId: row.orderId,
         displayNo: text(row.displayNo),
         createdAt: text(row.createdAt),
         orderTotal: num(row.orderTotal),
         buyerStage: text(row.buyerStage),
         buyerStageLabel: text(row.buyerStageLabel, '處理中'),
-      }]
+      }
+      if ('refundId' in row || 'refundAmount' in row || 'refundCreatedAt' in row) {
+        if (typeof row.refundId === 'string' && row.refundId) order.refundId = row.refundId
+        if (typeof row.refundCreatedAt === 'string' && row.refundCreatedAt) order.refundCreatedAt = row.refundCreatedAt
+        order.refundAmount = parseRefundAmount(row.refundAmount, 'refundAmount' in row)
+      }
+      if ('completedRemainingAmount' in row) {
+        order.completedRemainingAmount = parseCompletedRemainingAmount(row.completedRemainingAmount, true)
+      }
+      return [order]
     }),
     error: null,
   }

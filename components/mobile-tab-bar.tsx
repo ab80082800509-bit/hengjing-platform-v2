@@ -1,16 +1,19 @@
 'use client'
 
 import type { LucideIcon } from 'lucide-react'
-import { ClipboardList, Coins, ShoppingCart, Store } from 'lucide-react'
+import { ClipboardList, Coins, Gamepad2, ShoppingCart, Store } from 'lucide-react'
 
-type TabId = 'market' | 'rewards' | 'cart' | 'center'
+type TabId = 'market' | 'arcade' | 'rewards' | 'cart' | 'center'
 
 type Props = {
-  active: 'market' | 'rewards'
-  points: number
+  active: 'market' | 'rewards' | 'arcade'
+  points: number | null
   cartCount: number
-  centerBadge: number
+  cartAriaLabel?: string
+  centerBadge: number | null
+  centerBadgeError?: boolean
   onMarket: () => void
+  onArcade: () => void
   onRewards: () => void
   onCart: () => void
   onCenter: () => void
@@ -31,16 +34,17 @@ const BADGE_TONE = {
   brand: 'bg-primary/15 text-brand-ink',
 } as const
 
-export function MobileTabBar({ active, points, cartCount, centerBadge, onMarket, onRewards, onCart, onCenter }: Props) {
+export function MobileTabBar({ active, points, cartCount, cartAriaLabel, centerBadge, centerBadgeError = false, onMarket, onArcade, onRewards, onCart, onCenter }: Props) {
   const tabs: Tab[] = [
     { id: 'market', label: '市集', icon: Store, onClick: onMarket },
+    { id: 'arcade', label: '遊樂園', icon: Gamepad2, onClick: onArcade, ariaLabel: 'Pay 服遊樂園' },
     {
       id: 'rewards',
-      label: '簽到兌換',
+      label: '點數商城',
       icon: Coins,
       onClick: onRewards,
-      badge: { value: points, tone: 'brand' },
-      ariaLabel: `簽到兌換，目前 ${points} 點`,
+      badge: points != null ? { value: points, tone: 'brand' } : undefined,
+      ariaLabel: points == null ? '點數商城，點數尚未顯示' : `點數商城，目前 ${points} 點`,
     },
     {
       id: 'cart',
@@ -48,15 +52,15 @@ export function MobileTabBar({ active, points, cartCount, centerBadge, onMarket,
       icon: ShoppingCart,
       onClick: onCart,
       badge: cartCount > 0 ? { value: cartCount, tone: 'dark' } : undefined,
-      ariaLabel: `購物車，${cartCount} 件商品`,
+      ariaLabel: cartAriaLabel ?? `購物車，${cartCount} 項商品，共 ${cartCount} 件`,
     },
     {
       id: 'center',
       label: '買家中心',
       icon: ClipboardList,
       onClick: onCenter,
-      badge: centerBadge > 0 ? { value: centerBadge, tone: 'alert' } : undefined,
-      ariaLabel: `買家中心，${centerBadge} 則未讀訂單通知`,
+      badge: centerBadge != null && centerBadge > 0 ? { value: centerBadge, tone: 'alert' } : undefined,
+      ariaLabel: centerBadgeError ? '買家中心，未讀訂單通知無法讀取' : centerBadge == null ? '買家中心' : `買家中心，${centerBadge} 則未讀訂單通知`,
     },
   ]
 
@@ -65,7 +69,7 @@ export function MobileTabBar({ active, points, cartCount, centerBadge, onMarket,
       aria-label="買家快速導覽"
       className="fixed inset-x-0 bottom-0 z-20 border-t border-border/70 bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden"
     >
-      <ul className="mx-auto grid max-w-md grid-cols-4 px-1 pt-1.5">
+      <ul className="mx-auto grid max-w-md grid-cols-5 px-1 pt-1.5">
         {tabs.map((tab) => {
           const isActive = tab.id === active
           return (

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, type ReactNode } from 'react'
-import { Check, Clover, Coins, Crown, Gift, Info, Recycle, Share2, ShoppingBag, Ticket, type LucideIcon } from 'lucide-react'
+import { Check, Clover, Coins, Crown, Gift, Info, Share2, Ticket, type LucideIcon } from 'lucide-react'
 import { ResetCountdown } from './day-clock'
 import { Confetti } from './confetti'
 import { ScratchSurface } from './scratch-surface'
@@ -15,66 +15,56 @@ const PRIZE_TINT: Record<PrizeKind, string> = {
   none: 'bg-muted text-muted-foreground',
 }
 
-const nt = (n: number) => `NT$ ${n.toLocaleString('zh-TW')}`
-
 function describe(o: ScratchOutcome) {
   if (o.kind === 'none') {
     return {
       title: `保底 +${o.points} 點`,
-      sub: '再接再厲，保底平台通用點數已入帳',
-      summary: `這次沒有中大獎，已發放保底 ${o.points} 點平台通用點數，明天 00:00 重製後再來試試手氣。`,
+      sub: '已寫入正式點數帳本',
+      summary: `這次沒有中大獎。保底 ${o.points} 點已寫入正式點數帳本。`,
+    }
+  }
+  if (o.kind === 'coupon') {
+    return {
+      title: o.headline,
+      sub: `${o.sellerName}・已放入券包`,
+      summary: `獲得「${o.sellerName}」${o.title}。這次沒有改點數，也沒有同時領替代點數。`,
     }
   }
   if (o.kind === 'points') {
-    const sub = o.fallbackFrom ? (o.fallbackFrom === 'founder' ? '大額券今日已發完，改發紅利點數' : '優惠券已發完或已持有，改發紅利點數') : '平台簽到紅利點數已入帳'
-    return { title: `+${o.points} 點`, sub, summary: `恭喜獲得 ${o.points} 點平台簽到紅利點數，已存入您的點數。` }
+    const sub = o.fallbackFrom === 'founder'
+      ? '創始券尚未開放，已改入帳正式點數'
+      : o.fallbackFrom === 'coupon'
+        ? '目前沒有可發的優惠券，已改入帳正式點數'
+        : '已寫入正式點數帳本'
+    const summary = o.fallbackFrom
+      ? o.fallbackFrom === 'founder'
+        ? `創始券尚未開放，這次改入帳 ${o.points} 點，已寫入正式點數帳本。沒有建立創始券。`
+        : `目前沒有可發的優惠券，這次改入帳 ${o.points} 點，已寫入正式點數帳本。沒有同時發券。`
+      : `獲得 ${o.points} 點，已寫入正式點數帳本。`
+    return { title: `+${o.points} 點`, sub, summary }
   }
   return {
-    title: o.headline,
-    sub: `${o.sellerName}・滿 ${nt(o.minSpend)} 可用`,
-    summary: `恭喜獲得「${o.sellerName}」${o.title}優惠券（折扣碼 ${o.code}），已發送至我的優惠券包，另贈 ${o.bonusPoints} 點保底紅利。`,
+    title: '這張結果不能使用',
+    sub: '請重新整理',
+    summary: '這次結果無法顯示。請重新整理；若點數已入帳或券已進券包，不會再發一次。',
   }
 }
 
 function PrizeFace({ card }: { card: ScratchCard }) {
   const o = card.outcome
-  const Icon = PRIZE_ICON[o.kind]
+  const iconKind = o.kind === 'founder' ? 'points' : o.kind
+  const Icon = PRIZE_ICON[iconKind]
   const { title, sub } = describe(o)
-
-  if (card.recycled && (o.kind === 'coupon' || o.kind === 'founder')) {
-    return (
-      <div
-        aria-hidden={!card.revealed}
-        className="flex h-full w-full flex-col items-center justify-center gap-1.5 bg-gradient-to-br from-accent via-card to-background px-4 text-center"
-      >
-        <span className="flex size-12 items-center justify-center rounded-2xl bg-amber-500/15 text-amber-400">
-          <Recycle className="size-6" aria-hidden />
-        </span>
-        <p className="text-balance text-2xl font-black text-foreground md:text-3xl">已分解 +{RECYCLE_POINTS} 點</p>
-        <p className="text-pretty text-xs text-muted-foreground md:text-sm">「{o.sellerName}」折價券已換成平台通用點數</p>
-      </div>
-    )
-  }
-
   return (
     <div
       aria-hidden={!card.revealed}
       className="flex h-full w-full flex-col items-center justify-center gap-1.5 bg-gradient-to-br from-accent via-card to-background px-4 text-center"
     >
-      <span className={`flex size-12 items-center justify-center rounded-2xl ${PRIZE_TINT[o.kind]}`}>
+      <span className={`flex size-12 items-center justify-center rounded-2xl ${PRIZE_TINT[iconKind]}`}>
         <Icon className="size-6" aria-hidden />
       </span>
       <p className="text-balance text-2xl font-black text-foreground md:text-3xl">{title}</p>
       <p className="text-pretty text-xs text-muted-foreground md:text-sm">{sub}</p>
-      {(o.kind === 'coupon' || o.kind === 'founder') && (
-        <p className="mt-1 rounded-lg border border-dashed border-primary/60 px-3 py-0.5 font-mono text-sm font-black tracking-widest text-brand-ink">{o.code}</p>
-      )}
-      {(o.kind === 'coupon' || o.kind === 'founder') && (
-        <p className="inline-flex items-center gap-1 text-xs font-bold text-amber-400">
-          <Coins className="size-3.5" aria-hidden />
-          另贈保底 {o.bonusPoints} 點
-        </p>
-      )}
     </div>
   )
 }
@@ -85,8 +75,8 @@ function IdleFace({ exhausted }: { exhausted: boolean }) {
       <span className="flex size-12 items-center justify-center rounded-2xl bg-card text-muted-foreground">
         <Ticket className="size-6" aria-hidden />
       </span>
-      <p className="text-base font-black">{exhausted ? '今日免費次數已用完' : '今日幸運刮刮卡'}</p>
-      <p className="text-xs text-muted-foreground">{exhausted ? '明天 00:00 重製後再來刮一張' : '按下「開始刮卡」，再用手指或滑鼠刮開塗層'}</p>
+      <p className="text-base font-black">{exhausted ? '今日次數已用完' : '今日幸運刮刮卡'}</p>
+      <p className="text-xs text-muted-foreground">{exhausted ? '台灣時間明天 00:00 後再來刮一張' : '按下「開始刮卡」，再用手指或滑鼠刮開塗層'}</p>
     </div>
   )
 }
@@ -106,58 +96,51 @@ export function ScratchCardPanel({
   chancesTotal,
   chancesLeft,
   shared,
-  founderLeft,
   card,
+  busy,
+  errorText,
   onStart,
   onReveal,
   onShare,
-  onGoCoupons,
-  onRecycle,
-  onGoStore,
 }: {
   loggedIn: boolean
   skew: number
-  chancesTotal: number
-  chancesLeft: number
+  chancesTotal: number | null
+  chancesLeft: number | null
   shared: boolean
-  founderLeft: number
   card: ScratchCard | null
+  busy: boolean
+  errorText: string | null
   onStart: () => void
   onReveal: () => void
   onShare: () => void
-  onGoCoupons: () => void
-  onRecycle: () => void
-  onGoStore: (sellerId: string) => void
 }) {
   const [progress, setProgress] = useState(0)
   const [fireKey, setFireKey] = useState(0)
 
   const scratching = !!card && !card.revealed
-  const exhausted = loggedIn && chancesLeft <= 0
-  const used = chancesTotal - chancesLeft
+  const exhausted = loggedIn && chancesLeft === 0
+  const used = chancesTotal != null && chancesLeft != null ? chancesTotal - chancesLeft : 0
 
   const handleReveal = () => {
-    if (!card || card.revealed) return
+    if (!card || card.revealed || busy) return
     onReveal()
-    if (card.outcome.kind !== 'none') setFireKey((k) => k + 1)
+    setFireKey((k) => k + 1)
   }
-
-  const wonCouponOutcome = card?.revealed && (card.outcome.kind === 'coupon' || card.outcome.kind === 'founder') ? card.outcome : null
-  const wonCoupon = !!wonCouponOutcome && !card?.recycled
 
   return (
     <div className="space-y-4 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-muted/50 px-4 py-3">
         <div>
-          <p className="text-xs text-muted-foreground">今日免費刮卡次數</p>
+          <p className="text-xs text-muted-foreground">今日刮卡次數</p>
           <div className="mt-1 flex items-center gap-1.5">
             {Array.from({ length: SCRATCH_MAX_CHANCES }, (_, i) => {
-              const unlocked = i < chancesTotal
-              const left = i >= used && unlocked
+              const unlocked = chancesTotal != null && i < chancesTotal
+              const left = unlocked && i >= used
               return (
                 <span
                   key={i}
-                  title={!unlocked ? '邀請朋友解鎖' : left ? '可使用' : '已使用'}
+                  title={!unlocked ? '朋友完成註冊後解鎖' : left ? '可使用' : '已使用'}
                   className={`flex size-8 items-center justify-center rounded-lg border ${
                     left
                       ? 'border-primary bg-accent text-brand-ink'
@@ -171,15 +154,21 @@ export function ScratchCardPanel({
               )
             })}
             <span className="ml-1 text-sm font-black">
-              {loggedIn ? `剩餘 ${chancesLeft} / ${chancesTotal} 次` : '登入後免費 1 次'}
+              {!loggedIn ? '登入後免費 1 次' : chancesLeft == null || chancesTotal == null ? '讀取中' : `剩餘 ${chancesLeft} / ${chancesTotal} 次`}
             </span>
           </div>
         </div>
         <div className="text-right">
-          <p className="text-xs text-muted-foreground">距離每日 00:00 免費次數重製</p>
+          <p className="text-xs text-muted-foreground">距離台灣時間 00:00 重製</p>
           <ResetCountdown skew={skew} className="text-xl font-black text-brand-ink" />
         </div>
       </div>
+
+      {errorText && (
+        <p role="alert" className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm font-bold text-destructive">
+          {errorText}
+        </p>
+      )}
 
       <div className="relative">
         {card ? (
@@ -195,7 +184,7 @@ export function ScratchCardPanel({
       {scratching && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>已刮開 {Math.min(100, Math.round(progress * 100))}%（超過 50% 自動揭曉）</span>
-          <button type="button" onClick={handleReveal} className="rounded-full border border-border bg-card px-3 py-1 font-bold text-foreground transition hover:bg-muted">
+          <button type="button" onClick={handleReveal} disabled={busy} className="rounded-full border border-border bg-card px-3 py-1 font-bold text-foreground transition hover:bg-muted disabled:opacity-50">
             直接揭曉
           </button>
         </div>
@@ -203,40 +192,17 @@ export function ScratchCardPanel({
 
       {card?.revealed && (
         <p role="status" className="rounded-2xl bg-accent px-4 py-3 text-sm font-bold text-accent-foreground">
-          {card.recycled && wonCouponOutcome
-            ? `已將「${wonCouponOutcome.sellerName}」折價券分解為 ${RECYCLE_POINTS} 點平台通用點數，連同保底共獲得 ${RECYCLE_POINTS + wonCouponOutcome.bonusPoints} 點。`
-            : describe(card.outcome).summary}
+          {describe(card.outcome).summary}
         </p>
       )}
 
-      {wonCoupon && wonCouponOutcome && (
-        <div className="grid gap-2 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => onGoStore(wonCouponOutcome.sellerId)}
-            className="inline-flex items-center justify-center gap-1.5 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition hover:brightness-95 active:scale-[0.98]"
-          >
-            <ShoppingBag className="size-4" aria-hidden />
-            收下並去逛逛
-          </button>
-          <button
-            type="button"
-            onClick={onRecycle}
-            className="inline-flex items-center justify-center gap-1.5 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold text-foreground transition hover:bg-muted active:scale-[0.98]"
-          >
-            <Recycle className="size-4" aria-hidden />
-            不想要？分解換 {RECYCLE_POINTS} 點
-          </button>
-        </div>
-      )}
-
       {!scratching && (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2">
           {exhausted ? (
             <button
               type="button"
               disabled
-              className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-full bg-muted px-5 py-2.5 text-sm font-bold text-muted-foreground sm:col-span-2"
+              className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-full bg-muted px-5 py-2.5 text-sm font-bold text-muted-foreground"
             >
               <Ticket className="size-4" aria-hidden />
               今日次數已用完，明天再來
@@ -245,20 +211,11 @@ export function ScratchCardPanel({
             <button
               type="button"
               onClick={onStart}
-              className={`inline-flex items-center justify-center gap-1.5 rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition hover:brightness-95 active:scale-[0.98] ${wonCoupon ? '' : 'sm:col-span-2'}`}
+              disabled={busy}
+              className="inline-flex items-center justify-center gap-1.5 rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition hover:brightness-95 active:scale-[0.98] disabled:opacity-50"
             >
               <Ticket className="size-4" aria-hidden />
-              {!loggedIn ? '登入後免費刮卡' : card?.revealed ? '再刮一張' : '開始刮卡'}
-            </button>
-          )}
-          {wonCoupon && (
-            <button
-              type="button"
-              onClick={onGoCoupons}
-              className={`inline-flex items-center justify-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted active:scale-[0.98] ${exhausted ? 'sm:col-span-2' : ''}`}
-            >
-              <Gift className="size-4" aria-hidden />
-              查看我的優惠券包
+              {!loggedIn ? '登入後免費刮卡' : busy ? '正在向伺服器確認…' : card?.revealed ? '再刮一張' : '開始刮卡'}
             </button>
           )}
         </div>
@@ -266,7 +223,7 @@ export function ScratchCardPanel({
 
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border/70 px-4 py-3">
         <p className="min-w-0 text-xs text-muted-foreground">
-          {shared ? '今日已領取邀請加碼，免費次數共 2 次' : '朋友透過你的專屬連結進站，今日可額外多刮 1 次（每日上限 2 次）'}
+          {shared ? '今天已有朋友完成註冊，刮卡次數共 2 次' : '朋友用你的連結完成註冊並驗證信箱後，今天可再刮 1 次。只點開連結不會加次數。'}
         </p>
         {shared ? (
           <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-400">
@@ -285,7 +242,7 @@ export function ScratchCardPanel({
         )}
       </div>
 
-      <Section title="獎項與中獎機率">
+      <Section title="玩法、次數與獎勵">
         <ul className="mt-3 space-y-2">
           {PRIZE_TABLE.map((p) => {
             const Icon = PRIZE_ICON[p.kind]
@@ -296,9 +253,7 @@ export function ScratchCardPanel({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-black">{p.label}</p>
-                  <p className="text-pretty text-xs text-muted-foreground">
-                    {p.kind === 'founder' ? `${p.detail}（今日剩餘 ${founderLeft} 張）` : p.detail}
-                  </p>
+                  <p className="text-pretty text-xs text-muted-foreground">{p.detail}</p>
                 </div>
                 <span className="shrink-0 text-right">
                   <span className="block text-lg font-black text-brand-ink">約 {p.odds}%</span>
@@ -309,16 +264,18 @@ export function ScratchCardPanel({
           })}
         </ul>
         <ul className="mt-3 list-disc space-y-1 pl-5 text-xs leading-relaxed text-muted-foreground">
-          <li>每位會員每日免費 1 次，朋友透過你的專屬邀請連結進站後可額外獲得 1 次，每日上限 2 次，台灣時間每日 00:00 重製。</li>
-          <li>優惠券由賣家自主發行、履約與售後，結帳時折抵商品金額；平台不經手交易金流，不提供現金或購物金折抵。</li>
-          <li>優惠券已發完或已持有同款時，改發紅利點數（一般券 20 點、大額券 30 點）。</li>
-          <li>刮中折價券不想要？可當場分解為 {RECYCLE_POINTS} 點平台通用點數，分解後折價券會退回賣家名額，且無法復原。</li>
+          <li>每位會員每天免費 1 次。朋友必須用你的連結完成新會員註冊，並完成信箱驗證，你當天才能再刮 1 次。</li>
+          <li>只點開連結、未完成註冊，不會增加次數。同一位朋友只能成立一次，不能邀請自己。</li>
+          <li>每天最多 2 次。邀請加的那 1 次只在台灣時間當天有效，00:00 作廢，不會留到隔天。</li>
+          <li>開獎與入帳都由伺服器決定。重新整理、重新登入或換裝置不會補回已用次數，也不會重領同一張。</li>
+          <li>刮中一般券時，只會發一張商家授權的券，或改入帳替代點數，不會兩樣一起領。附贈點數與分解成 {RECYCLE_POINTS} 點尚未開放。</li>
+          <li>平台不經手商品貨款。這裡的點數也不能拿去結帳折抵。</li>
         </ul>
       </Section>
 
       <p className="flex items-start gap-2 rounded-2xl border border-dashed border-primary/50 bg-accent/60 px-4 py-3 text-xs leading-relaxed text-accent-foreground">
         <Info className="mt-0.5 size-4 shrink-0 text-brand-ink" aria-hidden />
-        獲得的平台點數可至【簽到點數商城】自由兌換全站任意賣家的專屬優惠券喔！
+        刮卡點數寫入與每日簽到相同的正式點數帳本。商家授權的券會進入券包；沒有可發的券才改入帳點數。創始券仍只入帳點數。
       </p>
     </div>
   )

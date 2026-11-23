@@ -1,45 +1,67 @@
 'use client'
 
 import { ChevronRight, Ticket } from 'lucide-react'
-import { CheckinCard } from './checkin-card'
+import { CheckinCard, type CheckinPhase } from './checkin-card'
 import { ResetCountdown } from './day-clock'
 import { PRIZE_TABLE } from './scratch-config'
 
 export function DailyRewards({
-  loggedIn,
+  phase,
   points,
   rewards,
   checkedDays,
   checkedToday,
+  nextReward,
   skew,
+  busy,
+  burstPoints,
+  errorText,
   scratchLeft,
   scratchTotal,
+  scratchError,
   onCheckIn,
   onOpenScratch,
   onSeeRewards,
 }: {
-  loggedIn: boolean
+  phase: CheckinPhase
   points: number
-  rewards: number[]
+  rewards: readonly number[]
   checkedDays: number
   checkedToday: boolean
+  nextReward: number | null
   skew: number
-  scratchLeft: number
-  scratchTotal: number
+  busy: boolean
+  burstPoints: number | null
+  errorText: string | null
+  scratchLeft: number | null
+  scratchTotal: number | null
+  scratchError: string | null
   onCheckIn: () => void
   onOpenScratch: () => void
   onSeeRewards: () => void
 }) {
-  const exhausted = loggedIn && scratchLeft <= 0
+  const loggedIn = phase === 'ready' || phase === 'loading' || phase === 'error'
+  const exhausted = phase === 'ready' && scratchLeft === 0
+  const countText = !loggedIn
+    ? '1 / 1'
+    : scratchError
+      ? '暫時無法讀取'
+      : scratchLeft == null || scratchTotal == null
+        ? '讀取中'
+        : `${scratchLeft} / ${scratchTotal}`
   return (
     <section aria-label="每日任務" className="mt-6 grid gap-4 md:mt-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
       <CheckinCard
-        loggedIn={loggedIn}
+        phase={phase}
         points={points}
         rewards={rewards}
         checkedDays={checkedDays}
         checkedToday={checkedToday}
+        nextReward={nextReward}
         skew={skew}
+        busy={busy}
+        burstPoints={burstPoints}
+        errorText={errorText}
         onCheckIn={onCheckIn}
         footer={
           <button type="button" onClick={onSeeRewards} className="flex w-full items-center justify-center gap-1 text-xs font-bold text-brand-ink hover:underline">
@@ -56,7 +78,7 @@ export function DailyRewards({
           </span>
           <div className="min-w-0">
             <h2 className="text-lg font-black">每日幸運刮刮卡</h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">每日免費刮 1 次，邀請朋友進站再 +1 次</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">每天免費刮 1 次，朋友完成註冊再 +1 次</p>
           </div>
         </div>
 
@@ -71,7 +93,7 @@ export function DailyRewards({
         <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/50 px-4 py-3 text-xs">
           <div>
             <p className="text-muted-foreground">今日剩餘次數</p>
-            <p className="text-lg font-black text-foreground">{loggedIn ? `${scratchLeft} / ${scratchTotal}` : '1 / 1'}</p>
+            <p className="text-lg font-black text-foreground">{countText}</p>
           </div>
           <div className="text-right">
             <p className="text-muted-foreground">00:00 重製倒數</p>

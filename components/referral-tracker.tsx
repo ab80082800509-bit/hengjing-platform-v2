@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { rememberSignupInvite } from '@/lib/rewards/pending-invite'
 import { getVisitorId } from '@/lib/visitor'
 
 export function ReferralTracker() {
@@ -12,6 +13,8 @@ export function ReferralTracker() {
     url.searchParams.delete('ref')
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
 
+    rememberSignupInvite(code)
+    // 進站紀錄只留在既有邀請資料庫，不會增加刮卡次數。
     void fetch('/api/referral/visit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -4,6 +4,43 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { CHECKIN_REWARDS } from '@/lib/rewards/foundation'
+import { claimMyDailyCheckin, fetchMyCheckinState, type CheckinSnapshot } from '@/lib/rewards/checkin-client'
+import { fetchMyPointHistory, type PointHistoryCursor, type PointHistoryItem } from '@/lib/rewards/point-history-client'
+import {
+  CART_MIGRATION_MARKER_KEY,
+  LEGACY_CART_KEY,
+  cartCounts,
+  cartSellerKey,
+  findSellerForMember,
+  legacyCartPayload,
+  legacyLinesToImport,
+  lineIdentity,
+  migrationToken,
+  parseLegacyCart,
+  type RemoteCartLine,
+} from '@/lib/commerce-cart'
+import { addCartItem, listMyCart, removeCartItem, setCartItemQty } from '@/lib/commerce-cart-client'
+import { ownRejectedResubmit } from '@/lib/seller-resubmit'
+import { settleMySignupInvite } from '@/lib/rewards/invite-client'
+import { clearSignupInvite, readSignupInvite } from '@/lib/rewards/pending-invite'
+import { drawMyScratchCard, fetchMyScratchState, revealMyScratchCard } from '@/lib/rewards/scratch-client'
+import { fetchMyPerks, purchaseMyPerk, setMyPerkEquipped } from '@/lib/rewards/perk-client'
+import { fetchMyPointsMall } from '@/lib/arcade/arcade-client'
+import type { PerkSnapshot } from '@/lib/rewards/perk-snapshot'
+import {
+  claimStorefrontCoupon,
+  deleteMySellerCoupon,
+  exchangeMyCoupon,
+  exchangeMyPointOffer,
+  fetchMyCouponWallet,
+  fetchMySellerCoupons,
+  fetchStoreCoupons,
+  saveMySellerCoupon,
+  setMySellerCouponFlag,
+} from '@/lib/rewards/coupon-client'
+import type { SellerCouponRecord, WalletCouponRecord } from '@/lib/rewards/coupon-snapshot'
+import type { ScratchSnapshot } from '@/lib/rewards/scratch-snapshot'
 import { AdminAuthModal, AdminSecurityBanner, ADMIN_MAX_ATTEMPTS } from './admin-security'
 import { InstallAppButton } from './install-app-guide'
 import { MobileTabBar } from './mobile-tab-bar'
@@ -15,25 +52,18 @@ import { HeroCarousel } from './home/hero-carousel'
 import { QuickGrid, type QuickKey } from './home/quick-grid'
 import { TrustModal } from './home/trust-modal'
 import { DailyRewards } from './home/daily-rewards'
-import { CheckinCard } from './home/checkin-card'
+import { CheckinCard, type CheckinPhase } from './home/checkin-card'
 import { ScratchCardPanel } from './home/scratch-card-panel'
 import { InvitePanel } from './home/invite-panel'
-import { msUntilReset, useDayIndex } from './home/day-clock'
+import { useDayIndex } from './home/day-clock'
 import { perkById, type EquippedPerks } from './home/perks-catalog'
-import { PerkAvatar, PerksPanel, PerkPreviewContent, PerkTags, skinStyleFor, type PerkViewer } from './home/perks-shop'
+import { isPerkEquipped } from '@/lib/rewards/perk-catalog'
+import type { MallPerkServer } from '@/lib/rewards/perk-mall-state'
+import { MyPerksPanel, PerkAvatar, PerksPanel, PerkPreviewContent, PerkTags, skinStyleFor, type PerkViewer } from './home/perks-shop'
+import { GameBadgeChip } from './arcade/achievement-wall'
+import { ProfileEffect } from './home/perk-visuals'
+import { fetchPublicGameBadges } from '@/lib/arcade/arcade-client'
 import {
-  COUPON_BONUS_POINTS,
-  COUPON_FALLBACK_POINTS,
-  FOUNDER_BONUS_POINTS,
-  FOUNDER_DAILY_QUOTA,
-  FOUNDER_FALLBACK_POINTS,
-  NONE_GUARANTEE_POINTS,
-  RECYCLE_POINTS,
-  SCRATCH_BASE_CHANCES,
-  SCRATCH_MAX_CHANCES,
-  SCRATCH_SHARE_BONUS,
-  rollPointAmount,
-  rollPrizeKind,
   type ScratchCard,
   type ScratchOutcome,
 } from './home/scratch-config'
@@ -41,12 +71,14 @@ import { SecurityPanel, ForgotPasswordModal, SetNewPasswordModal } from './accou
 import { AdminAnnouncementsPanel, AnnouncementMarquee, type PublicAnnouncement } from './platform-announcements'
 import { SupportCenter, AdminTicketsPanel, type SupportTicket } from './support-center'
 import { OnboardingTour } from './onboarding-tour'
+import { dismissWelcome, guideOwner, rememberTour, toursSeenFor, welcomeDismissed } from './guide-memory'
 import { BuyerProfileHeader, BuyerProfilePanel, FavoritesPanel, FollowingPanel, UserAvatar, type FollowPrefs } from './buyer-profile'
 import { SimilarProductsDialog } from './similar-products'
 import { StorefrontEditor } from './storefront-editor'
 import { SellerChatDialog, SellerChatPanel, type ChatProductPreview } from './seller-chat'
 import { BuyerOrdersPanel, OrderNotifications, SellerOrdersPanel, SellerReportPanel, SellerSnapshotCards, useOrderUnread } from './commerce-orders'
 import { listMyBuyerOrders, type BuyerOrderBucket } from '@/lib/commerce-orders'
+import { maxLineOnHand, optionFieldOnHand, optionFieldState, stockView } from '@/lib/catalog-stock'
 import {
   addFavorite,
   adminUpdateTicket,
@@ -83,7 +115,11 @@ import {
 } from '@/lib/marketplace-features'
 import { ACCEPT_ATTR, readFileAsDataUrl, validateImageFile } from '@/lib/image-utils'
 import { signupErrorZh } from '@/lib/auth-errors'
-import { marketplaceHref, readMarketplaceNav, sameNav, type MarketplaceNav, type SellerTab } from '@/lib/marketplace-url'
+import { marketplaceHref, readMarketplaceNav, sameNav, type ArcadeGame, type MarketplaceNav, type SellerTab } from '@/lib/marketplace-url'
+import { ArcadePage, type HubTab } from './arcade/arcade-page'
+import { CouponPointOffers } from './seller/coupon-point-offers'
+import { FestivalBanner } from './arcade/festival-banner'
+import { FestivalAdminPreview } from './festival/festival-admin-preview'
 import { EvidenceThumbs, EvidenceUploader } from './evidence-uploader'
 import {
   Baby,
@@ -97,6 +133,7 @@ import {
   ArrowLeft,
   Coins,
   Copy,
+  Gamepad2,
   Gift,
   Headset,
   Medal,
@@ -177,6 +214,7 @@ import {
   type CouponKind,
 } from '@/components/seller/coupon-utils'
 import { VariantEditor, parseOptions, isSizeName } from '@/components/variant-editor'
+import { AdminSellerExtensionPanel, SellerSubscriptionPanel, SellerSubscriptionReminderList, eligibilityText, loadMySubscriptionReminders, markMySubscriptionRemindersRead, type SubscriptionReminder, type SubscriptionView } from '@/components/seller-subscription-panel'
 
 /* ----------------------------------------------------------------------------
  * 型別
@@ -262,6 +300,9 @@ interface WalletEntry {
   expiresAt: string
   usedAt?: string
   orderId?: string
+  source?: 'shelf' | 'points' | 'scratch'
+  sellerName?: string
+  status?: 'unused' | 'expired'
 }
 
 type WalletStatus = 'unused' | 'used' | 'expired'
@@ -393,6 +434,21 @@ interface Review {
   text: string
   date: string
   photos?: string[]
+  gameBadge?: string
+}
+
+function toPublicReview(row: PublicReview): Review {
+  return {
+    id: row.id,
+    user: row.nickname,
+    rating: row.rating,
+    text: row.body,
+    date: row.createdAt.slice(0, 10),
+    reply: row.reply ? { text: row.reply, at: row.repliedAt ?? '' } : undefined,
+    photos: row.photos,
+    perks: row.equipped,
+    gameBadge: row.gameBadge,
+  }
 }
 
 interface VariantGroup {
@@ -615,9 +671,16 @@ function catalogSeller(id: string, known?: Seller): Seller {
 
 interface CartLine {
   key: string
+  cartItemId?: string
   productId: string
   variant: Record<string, string>
   qty: number
+  sellerId?: string
+  name?: string
+  image?: string
+  unitPrice?: number | null
+  purchasable?: boolean
+  unavailableReason?: string
 }
 
 interface OrderItem {
@@ -1068,48 +1131,22 @@ const SEED_SELLERS: Seller[] = [
   },
 ]
 
-const SEED_COUPONS: Coupon[] = [
-  { id: 'c1', sellerId: 's1', code: 'SHOP50', name: '新客見面禮', amount: 50, minSpend: 500, qty: 50, redeemed: 38, usedOrders: 21, listed: true, cost: 100, active: true, startAt: '2026-10-01', endAt: '2026-11-30' },
-  { id: 'c2', sellerId: 's2', code: 'LIGHT100', name: '點燈感謝券', amount: 100, minSpend: 1200, qty: 30, redeemed: 27, usedOrders: 14, listed: true, cost: 100, active: true, startAt: '2026-10-01', endAt: '2026-11-30' },
-  { id: 'c3', sellerId: 's3', code: 'GO80', name: '出發優惠券', amount: 80, minSpend: 800, qty: 100, redeemed: 21, usedOrders: 9, listed: true, cost: 100, active: true, startAt: '2026-10-01', endAt: '2026-11-30' },
-  { id: 'c4', sellerId: 's1', code: 'CLAY30', name: '店內小額券', amount: 30, minSpend: 300, qty: 80, redeemed: 0, usedOrders: 6, listed: false, shelf: true, cost: 100, active: true, startAt: '2026-10-01', endAt: '2026-12-31' },
-  { id: 'c5', sellerId: 's2', code: 'WELCOME60', name: '歡迎入店券', amount: 60, minSpend: 600, qty: 40, redeemed: 12, usedOrders: 8, listed: false, shelf: true, cost: 100, active: true, startAt: '2026-10-01', endAt: '2026-12-31' },
-  { id: 'c6', sellerId: 's1', code: 'FREESHIP8', name: '全店免運券', kind: 'freeship', amount: 0, minSpend: 800, qty: 60, redeemed: 0, usedOrders: 0, listed: false, shelf: true, cost: 100, active: true, startAt: '2026-10-16', endAt: '2026-11-15' },
-  { id: 'c7', sellerId: 's1', code: 'OPEN20', name: '開幕慶典券', amount: 20, minSpend: 200, qty: 30, redeemed: 30, usedOrders: 24, listed: false, cost: 100, active: true, startAt: '2026-09-01', endAt: '2026-10-10' },
-  { id: 'cf1', sellerId: 's1', code: 'FOUNDER200', name: '創始特約店大額券', amount: 200, minSpend: 1500, qty: 20, redeemed: 0, usedOrders: 0, listed: false, cost: 0, active: true, exclusive: true, founderPrize: true, startAt: '2026-10-01', endAt: '2026-12-31' },
-  { id: 'cf2', sellerId: 's2', code: 'FOUNDER300', name: '創始特約店大額券', amount: 300, minSpend: 2500, qty: 10, redeemed: 0, usedOrders: 0, listed: false, cost: 0, active: true, exclusive: true, founderPrize: true, startAt: '2026-10-01', endAt: '2026-12-31' },
-  { id: 'cf3', sellerId: 's3', code: 'FOUNDER150', name: '創始特約店大額券', amount: 150, minSpend: 1000, qty: 30, redeemed: 0, usedOrders: 0, listed: false, cost: 0, active: true, exclusive: true, founderPrize: true, startAt: '2026-10-01', endAt: '2026-12-31' },
-]
-
-const SEED_LEDGER: LedgerEntry[] = [
-  { id: 'l2', delta: 10, label: '每日簽到（第 2 天）', at: '2026-10-14' },
-  { id: 'l1', delta: 10, label: '每日簽到（第 1 天）', at: '2026-10-13' },
-  { id: 'l0', delta: 100, label: '新手註冊禮', at: '2026-10-13' },
-]
-
-const CHECKIN_REWARDS = [10, 10, 15, 15, 20, 20, 50]
 const MAX_LISTED_COUPONS = 3
 const COUPON_DISCLAIMER =
   '本店鋪與簽到專區優惠券均由該賣家自主發行、履約與售後。本平台為獨立 SaaS 技術服務託管商，不經手交易金流與物流，亦不承擔履約與商品售後責任。'
 const TAX_NOTE =
   '賣家於本平台之營業行為，應依中華民國稅法規定自行辦理稅籍登記與報稅，平台依法提供綠界月費發票。'
 const couponRemain = (c: Coupon) => Math.max(0, c.qty - c.redeemed)
-const WALLET_VALID_DAYS = 30
-const walletExpiry = (c: Coupon, today: string) => {
-  const d = addDays(today, WALLET_VALID_DAYS)
-  return c.endAt && c.endAt < d ? c.endAt : d
-}
-const addDays = (dateStr: string, n: number) => {
-  const d = new Date(`${dateStr}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + n)
-  return d.toISOString().slice(0, 10)
-}
 const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000)
-const walletStatus = (w: WalletEntry): WalletStatus => (w.usedAt ? 'used' : w.expiresAt < new Date().toISOString().slice(0, 10) ? 'expired' : 'unused')
-const SEED_WALLET: WalletEntry[] = [
-  { id: 'w1', couponId: 'c5', code: 'WELCOME60', sellerId: 's2', amount: 60, minSpend: 600, claimedAt: '2026-09-20', expiresAt: '2026-10-20', usedAt: '2026-10-02', orderId: 'OD20261002008' },
-  { id: 'w2', couponId: 'c4', code: 'CLAY30', sellerId: 's1', amount: 30, minSpend: 300, claimedAt: '2026-08-30', expiresAt: '2026-09-29' },
-]
+const walletStatus = (w: WalletEntry): WalletStatus => {
+  if (w.usedAt) return 'used'
+  if (w.status === 'unused' || w.status === 'expired') return w.status
+  return w.expiresAt < new Date().toISOString().slice(0, 10) ? 'expired' : 'unused'
+}
+const walletSourceLabel = (source?: WalletEntry['source']) =>
+  source === 'shelf' ? '賣場領取' : source === 'points' ? '點數兌換' : source === 'scratch' ? '刮刮卡獎勵' : '優惠券'
+const toCoupon = (row: SellerCouponRecord): Coupon => ({ ...row })
+const toWallet = (row: WalletCouponRecord): WalletEntry => ({ ...row })
 
 const SEED_PRODUCTS: Product[] = [
   {
@@ -1623,7 +1660,6 @@ const DEMO_ACTIVE = { start: '2026-10-15', end: '2026-11-15' }
 const shipFee = (method: ShipKey, subtotal: number) => (subtotal >= FREE_SHIP ? 0 : SHIP[method].fee)
 
 const optKey = (group: string, option: string) => `${group}|${option}`
-const optionSoldOut = (p: Product, group: string, option: string) => p.optionStock?.[optKey(group, option)] === 0
 const MAX_COMBOS = 100
 const comboKey = (p: Product, sel: Record<string, string>) => p.variants.map((g) => optKey(g.name, sel[g.name] ?? '')).join('::')
 const isCombo = (p: Product) => p.variants.length > 1 && !!p.comboStock
@@ -1631,13 +1667,7 @@ const comboList = (p: Product) =>
   p.variants.reduce<Record<string, string>[]>((acc, g) => acc.flatMap((a) => g.options.map((o) => ({ ...a, [g.name]: o }))), [{}])
 const comboMatches = (p: Product, sel: Record<string, string>) =>
   comboList(p).filter((c) => Object.entries(sel).every(([g, o]) => c[g] === undefined || c[g] === o))
-const stockFor = (p: Product, sel: Record<string, string>) => {
-  if (isCombo(p)) return comboMatches(p, sel).reduce((s, c) => s + (p.comboStock?.[comboKey(p, c)] ?? 0), 0)
-  return Object.entries(sel).reduce((m, [g, o]) => {
-    const st = p.optionStock?.[optKey(g, o)]
-    return st === undefined ? m : Math.min(m, st)
-  }, p.stock)
-}
+const STOCK_LIMIT_NOTE = '這是商品欄位上的現貨上限，尚未扣除其他買家未到期的庫存保留，不是最終可售數量。庫存與交易以資料庫為準。'
 const unitPrice = (p: Product, sel: Record<string, string>) => {
   if (isCombo(p)) {
     const v = p.comboPrice?.[comboKey(p, sel)]
@@ -1664,9 +1694,11 @@ const priceSpan = (p: Product, sel: Record<string, string>): [number, number] =>
   return ps.length ? [Math.min(...ps), Math.max(...ps)] : [p.price, p.price]
 }
 const optionUnavailable = (p: Product, sel: Record<string, string>, group: string, option: string) =>
-  isCombo(p) ? stockFor(p, { ...sel, [group]: option }) === 0 : optionSoldOut(p, group, option)
-const optionStockHint = (p: Product, sel: Record<string, string>, group: string, option: string): number | undefined =>
-  isCombo(p) ? stockFor(p, { ...sel, [group]: option }) : p.optionStock?.[optKey(group, option)]
+  optionFieldState(p, sel, group, option) === 'out'
+const optionUnknown = (p: Product, sel: Record<string, string>, group: string, option: string) =>
+  optionFieldState(p, sel, group, option) === 'unknown'
+const optionStockHint = (p: Product, sel: Record<string, string>, group: string, option: string): number | null =>
+  optionFieldOnHand(p, sel, group, option)
 const pickMessage = (names: string[]) =>
   `請先選擇${[...names].sort((a, b) => Number(isSizeName(b)) - Number(isSizeName(a))).join('與')}`
 const fmtOpt = (o: string) => (/^(XXS|XS|S|M|L|XL|[2-5]XL)$/i.test(o) ? `${o.toUpperCase()}號` : o)
@@ -1703,6 +1735,7 @@ function ReviewReplyBox({ review, perks, onSubmit }: { review?: Review; perks?: 
           <Star className="size-3" />
           <span>{review.user}</span>
           <PerkTags equipped={perks} />
+          <GameBadgeChip achievementId={review.gameBadge} />
           <span className="sr-only">的評價：</span>
           <span className="font-bold text-foreground">{review.rating} 星</span>
         </div>
@@ -1772,10 +1805,10 @@ let modalSeq = 0
  * 共用小元件
  * -------------------------------------------------------------------------- */
 
-function ScratchShareModal({ name, onClose, onShared }: { name: string; onClose: () => void; onShared: () => void }) {
+function ScratchShareModal({ userId, onClose }: { userId: string | null; onClose: () => void }) {
   return (
     <Modal title="邀請朋友加碼" onClose={onClose} size="sm" z={80}>
-      <InvitePanel name={name} onClaimed={onShared} />
+      <InvitePanel userId={userId} />
     </Modal>
   )
 }
@@ -1944,7 +1977,7 @@ function toSupportTicket(row: TicketRow): SupportTicket {
 
 function VerifiedBadge({ label = false }: { label?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-0.5 text-verified" title="已通過平台實名認證">
+    <span className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap text-verified" title="已通過平台實名認證">
       <BadgeCheck className="size-4 fill-verified text-card" aria-hidden />
       {label ? <span className="text-xs font-bold">實名認證</span> : <span className="sr-only">已通過平台實名認證</span>}
     </span>
@@ -2001,7 +2034,7 @@ function Tabs<T extends string>({
       className={
         scroll
           ? 'flex w-full min-w-0 max-w-full gap-2 overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
-          : 'flex gap-1 overflow-x-auto rounded-full border border-border/70 bg-card p-1 shadow-sm'
+          : 'flex w-full min-w-0 max-w-full gap-1 overflow-x-auto overscroll-x-contain rounded-full border border-border/70 bg-card p-1 shadow-sm'
       }
     >
       {tabs.map((t) => (
@@ -2423,7 +2456,7 @@ function FounderBadge({ seller, className = '', large = false }: { seller: Selle
   return (
     <span
       title={`第 ${seller.founderNo} 位創始店長・資深認證優質賣家`}
-      className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-gradient-to-r from-amber-300 via-yellow-200 to-amber-400 font-black text-amber-950 shadow-sm ring-1 ring-amber-500/70 ${large ? 'px-3 py-1 text-xs' : 'px-2 py-0.5 text-[11px]'} ${className}`}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-gradient-to-r from-amber-300 via-yellow-200 to-amber-400 font-black text-amber-950 shadow-sm ring-1 ring-amber-500/70 ${large ? 'px-3 py-1 text-xs' : 'px-2 py-0.5 text-[11px]'} ${className}`}
     >
       <Crown className={large ? 'size-3.5' : 'size-3'} />創始特約店
     </span>
@@ -2612,7 +2645,9 @@ function ProductModal({
   const rating = avg(product.reviews)
   const missing = product.variants.filter((g) => !sel[g.name])
   const complete = missing.length === 0
-  const limit = stockFor(product, sel)
+  const stock = stockView(product, sel)
+  const limit = stock.onHand
+  const unknownStock = limit == null
   const soldOut = limit === 0
   const [priceMin, priceMax] = priceSpan(product, sel)
   const shownPrice = priceMin
@@ -2645,15 +2680,23 @@ function ProductModal({
       const picked = sel[group.name]
       if (picked && group.options.includes(picked)) kept[group.name] = picked
     }
-    const safeQty = limit > 0 ? Math.min(qty, limit) : qty
+    const safeQty = limit != null && limit > 0 ? Math.min(qty, limit) : qty
     sessionStorage.setItem(pickKey, JSON.stringify({ sel: kept, qty: safeQty }))
-    if (limit > 0 && qty > limit) setQty(limit)
+    if (limit != null && limit > 0 && qty > limit) setQty(limit)
   }, [limit, pickKey, product.variants, qty, sel])
   const tryBuy = (action: (variant: Record<string, string>, qty: number) => void) => {
     if (!complete) {
       setNeedPick(true)
       onNotify?.(pickMessage(missing.map((g) => g.name)))
       variantsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+    if (unknownStock) {
+      onNotify?.('庫存資料無法確認，目前不能購買。沒有把無法讀取的數量當成 0。')
+      return
+    }
+    if (soldOut) {
+      onNotify?.('此規格的欄位現貨為 0。這不是已扣除未到期保留後的最終可售數量。')
       return
     }
     action(sel, qty)
@@ -2740,31 +2783,33 @@ function ProductModal({
                     <div className={`flex flex-wrap gap-2 rounded-2xl ${groupMissing ? 'ring-2 ring-destructive/50 ring-offset-2 ring-offset-background' : ''}`}>
                       {g.options.map((o) => {
                         const out = optionUnavailable(product, sel, g.name, o)
+                        const unknown = optionUnknown(product, sel, g.name, o)
                         const left = optionStockHint(product, sel, g.name, o)
-                        const low = !out && left !== undefined && left <= 5
+                        const low = !out && !unknown && left != null && left > 0 && left <= 5
                         const active = sel[g.name] === o
                         return (
                           <button
                             key={o}
                             type="button"
-                            disabled={out}
+                            disabled={out || unknown}
                             aria-pressed={active}
-                            aria-label={out ? `${o}（缺貨）` : low ? `${o}（剩 ${left} 件）` : o}
+                            aria-label={out ? `${o}（欄位現貨 0）` : unknown ? `${o}（庫存無法確認）` : low ? `${o}（欄位現貨 ${left} 件，未扣保留）` : o}
                             onClick={() => {
                               setSel({ ...sel, [g.name]: o })
                               setQty(1)
                             }}
                             className={`flex min-w-14 flex-col items-center rounded-xl border-2 px-3.5 py-2 text-sm font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                              out
+                              out || unknown
                                 ? 'cursor-not-allowed border-dashed border-border bg-muted text-muted-foreground/60'
                                 : active
                                   ? 'border-primary bg-accent text-accent-foreground'
                                   : 'border-border bg-card hover:border-primary/60'
                             }`}
                           >
-                            <span className={out ? 'line-through' : ''}>{fmtOpt(o)}</span>
-                            {out && <span className="text-[10px] font-bold">缺貨</span>}
-                            {low && <span className="text-[10px] font-bold text-destructive">剩 {left} 件</span>}
+                            <span className={out || unknown ? 'line-through' : ''}>{fmtOpt(o)}</span>
+                            {out && <span className="text-[10px] font-bold">現貨 0</span>}
+                            {unknown && <span className="text-[10px] font-bold">無法確認</span>}
+                            {low && <span className="text-[10px] font-bold text-destructive">現貨 {left}</span>}
                           </button>
                         )
                       })}
@@ -2789,20 +2834,25 @@ function ProductModal({
                   <Minus className="size-4" />
                 </button>
                 <span className="w-10 text-center text-sm font-bold" aria-live="polite">{qty}</span>
-                <button type="button" aria-label="增加數量" className="p-2 hover:bg-muted disabled:opacity-40 rounded-r-full" disabled={qty >= limit} onClick={() => setQty(qty + 1)}>
+                <button type="button" aria-label="增加數量" className="p-2 hover:bg-muted disabled:opacity-40 rounded-r-full" disabled={limit == null || qty >= limit} onClick={() => setQty(qty + 1)}>
                   <Plus className="size-4" />
                 </button>
               </div>
             </div>
-            <p className={`pt-5 text-sm font-bold ${limit <= 5 ? 'text-destructive' : 'text-muted-foreground'}`}>
-              {soldOut
-                ? `${pickedLabel ? `${pickedLabel} ` : ''}目前無庫存`
-                : product.variants.length === 0 || complete
-                  ? `${pickedLabel ? `${pickedLabel} ` : ''}庫存剩 ${limit} 件`
-                  : pickedLabel
-                    ? `${pickedLabel} 合計庫存剩 ${limit} 件`
-                    : `總庫存 ${limit} 件，請先選擇規格`}
-            </p>
+            <div className="pt-5">
+              <p className={`text-sm font-bold ${limit != null && limit <= 5 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                {unknownStock
+                  ? '庫存資料無法確認，目前不能購買。沒有把無法讀取的數量當成 0。'
+                  : soldOut
+                    ? `${pickedLabel ? `${pickedLabel} ` : ''}欄位現貨為 0`
+                    : product.variants.length === 0 || complete
+                      ? `${pickedLabel ? `${pickedLabel} ` : ''}欄位現貨最多 ${limit} 件`
+                      : pickedLabel
+                        ? `${pickedLabel} 的欄位現貨最多 ${limit} 件${stock.aggregate ? '（各組合合計，並受共享庫存封頂）' : ''}，請先選完規格`
+                        : `欄位現貨最多 ${limit} 件，請先選擇規格`}
+              </p>
+              <p className="mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">{STOCK_LIMIT_NOTE}</p>
+            </div>
           </div>
 
           {preview ? (
@@ -2820,10 +2870,10 @@ function ProductModal({
             </div>
           ) : (
           <div className="flex gap-3">
-            <button type="button" disabled={soldOut} onClick={() => tryBuy(onAdd)} className={`${btnGhost} flex-1 py-3 text-brand-ink`}>
+            <button type="button" disabled={soldOut || unknownStock} onClick={() => tryBuy(onAdd)} className={`${btnGhost} flex-1 py-3 text-brand-ink`}>
               <ShoppingCart className="size-4" /> 加入購物車
             </button>
-            <button type="button" disabled={soldOut} onClick={() => tryBuy(onBuyNow)} className={`${btnPrimary} flex-1`}>
+            <button type="button" disabled={soldOut || unknownStock} onClick={() => tryBuy(onBuyNow)} className={`${btnPrimary} flex-1`}>
               立即購買
             </button>
           </div>
@@ -2922,18 +2972,20 @@ function ProductModal({
               {product.reviews.map((r) => {
                 const mine = Boolean(viewer && r.owner === viewer.name)
                 const perks = mine ? viewer?.equipped : r.perks
+                const reviewViewer = mine && viewer ? viewer : { name: r.user, tone: 0 }
                 return (
                 <li key={r.id ?? r.user + r.date} className="rounded-2xl border border-border/70 p-4">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
-                      {mine && viewer ? (
-                        <PerkAvatar viewer={viewer} equipped={perks} size="size-8" textSize="text-xs" thickness={2} />
+                      {perks?.frame || (mine && viewer) ? (
+                        <PerkAvatar viewer={reviewViewer} equipped={perks} size="size-8" textSize="text-xs" thickness={2} />
                       ) : (
                         <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-black text-accent-foreground">{r.user.slice(0, 1)}</span>
                       )}
                       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                         <span className="text-sm font-bold">{r.user}</span>
                         <PerkTags equipped={perks} />
+                        <GameBadgeChip achievementId={r.gameBadge} />
                       </div>
                     </div>
                     <span className="shrink-0 text-xs text-muted-foreground">{r.date}</span>
@@ -3198,7 +3250,7 @@ function StorePage({
   checkin = false,
   redeemCoupons = [],
   shelfCoupons = [],
-  points = 0,
+  points = null,
   ownedCodes = [],
   onRedeem,
   onClaim,
@@ -3224,7 +3276,7 @@ function StorePage({
   checkin?: boolean
   redeemCoupons?: Coupon[]
   shelfCoupons?: Coupon[]
-  points?: number
+  points?: number | null
   ownedCodes?: string[]
   onRedeem?: (id: string) => void
   onClaim?: (id: string) => void
@@ -3357,7 +3409,7 @@ function StorePage({
                     : '本店目前沒有開放領取或兌換的優惠券'}
                 </p>
                 <p className={`text-xs ${theme.muted}`}>
-                  {viewer ? `您目前有 ${points} 點，簽到與刮刮卡都能賺點數` : '登入買家帳號後即可領取或用簽到點數兌換'}
+                  {viewer ? (points == null ? '點數讀取中，不會先顯示餘額' : `您目前有 ${points} 點。每日簽到會寫入這個餘額`) : '登入買家帳號後即可簽到領點'}
                 </p>
               </div>
             </div>
@@ -3492,7 +3544,7 @@ function StorePage({
             <h4 className="text-sm font-black">點數兌換</h4>
             <div className="flex items-center justify-between rounded-2xl bg-secondary px-4 py-3 text-sm text-secondary-foreground">
               <span className="font-bold">我的點數</span>
-              <span className="text-lg font-black text-brand-ink">{viewer ? `${points} 點` : '尚未登入'}</span>
+              <span className="text-lg font-black text-brand-ink">{viewer ? (points == null ? '讀取中' : `${points} 點`) : '尚未登入'}</span>
             </div>
             {redeemCoupons.length === 0 && (
               <p className="rounded-2xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">本店尚未開放點數兌換的優惠券</p>
@@ -3501,7 +3553,7 @@ function StorePage({
               {redeemCoupons.map((c) => {
                 const remain = couponRemain(c)
                 const owned = ownedCodes.includes(c.code)
-                const short = viewer && points < c.cost ? c.cost - points : 0
+                const short = viewer && points != null && points < c.cost ? c.cost - points : 0
                 return (
                   <li key={c.id} className="flex flex-col gap-2 rounded-2xl border border-border/70 bg-card p-4">
                     <div className="flex items-center justify-between gap-2">
@@ -3518,14 +3570,14 @@ function StorePage({
                       className={`${btnPrimary} mt-auto disabled:opacity-60`}
                     >
                       <Gift className="size-4" />
-                      {owned ? '已兌換' : short > 0 ? `${c.cost} 點兌換（還差 ${short} 點）` : `${c.cost} 點立即兌換`}
+                      {owned ? '已兌換' : points == null ? `${c.cost} 點兌換` : short > 0 ? `${c.cost} 點兌換（還差 ${short} 點）` : `${c.cost} 點立即兌換`}
                     </button>
                   </li>
                 )
               })}
             </ul>
             <p className="text-center text-xs text-muted-foreground">
-              點數不足？可到首頁【簽到點數商城】簽到，或玩每日幸運刮刮卡賺點數。
+              賣場領取不扣點，也不佔遊戲曝光名額。點數兌換固定 100 點，由正式點數帳本扣除。平台不收曝光費，也不保證一定刮中或被領取。正式結帳尚未開放，領取後不會被標成已使用。
             </p>
             <CouponDisclaimer />
           </div>
@@ -3623,6 +3675,24 @@ function StorePicker({
   )
 }
 
+function cartLineBlockReason(line: CartLine, product: Product | null, seller: Seller | null, cart: CartLine[]): string | null {
+  if (seller && isOffline(seller)) return null
+  if (line.purchasable === false) return line.unavailableReason || '此商品目前不能結帳'
+  if (!product) return line.unavailableReason || '找不到這個商品，可能已刪除，不能結帳'
+  if (!product.active || product.draft || product.flagged || priceReviewBlocksPublic(product)) return '此商品已下架或尚未公開，不能結帳'
+  if (!seller) return '無法確認賣家，不能結帳'
+  const cap = maxLineOnHand(product, line.variant, cart.filter((item) => item.productId === product.id && item.key !== line.key))
+  if (cap == null) return '庫存資料無法確認，不能結帳'
+  if (cap <= 0) return '此規格目前缺貨，不能結帳'
+  if (line.qty > cap) return `欄位現貨只剩 ${cap} 件，超出的數量不能結帳`
+  return null
+}
+
+function cartLineLabel(line: CartLine, product: Product | null) {
+  const variant = Object.values(line.variant).filter(Boolean).join(' / ') || '標準規格'
+  return `${product?.name || line.name || '無法顯示名稱的商品'}・${variant}・數量 ${line.qty} 件`
+}
+
 /* ----------------------------------------------------------------------------
  * 購物車（拆單）與結帳
  * -------------------------------------------------------------------------- */
@@ -3632,6 +3702,7 @@ function CartModal({
   products,
   sellers,
   loggedIn,
+  remoteReady,
   buyerName,
   onClose,
   onQty,
@@ -3649,6 +3720,7 @@ function CartModal({
   products: Product[]
   sellers: Seller[]
   loggedIn: boolean
+  remoteReady: boolean
   buyerName: string
   onClose: () => void
   onQty: (key: string, delta: number) => void
@@ -3682,34 +3754,49 @@ function CartModal({
   const [termsOpen, setTermsOpen] = useState(false)
 
   const groups = useMemo(() => {
-    const map = new Map<string, { seller: Seller; lines: { line: CartLine; product: Product }[] }>()
+    const map = new Map<string, { seller: Seller; lines: { line: CartLine; product: Product | null; blocked: string | null }[] }>()
+    const loose: { line: CartLine; product: Product | null; blocked: string }[] = []
     cart.forEach((line) => {
-      const product = products.find((p) => p.id === line.productId)
-      if (!product) return
-      const seller = sellers.find((s) => s.id === product.sellerId)
-      if (!seller) return
-      const g = map.get(seller.id) ?? { seller, lines: [] }
-      g.lines.push({ line, product })
-      map.set(seller.id, g)
+      const product = products.find((p) => p.id === line.productId) ?? null
+      const memberId = product?.sellerId || line.sellerId || ''
+      const matched = findSellerForMember(sellers, memberId)
+      const seller = matched ? { ...matched, id: cartSellerKey(matched, memberId) } : null
+      const blocked = cartLineBlockReason(line, product, seller, cart)
+      if (!seller) {
+        loose.push({ line, product, blocked: blocked || '無法確認賣家，不能結帳' })
+        return
+      }
+      const current = map.get(seller.id) ?? { seller, lines: [] }
+      current.lines.push({ line, product, blocked })
+      map.set(seller.id, current)
     })
-    return Array.from(map.values()).map((g) => {
-      const subtotal = g.lines.reduce((s, l) => s + unitPrice(l.product, l.line.variant) * l.line.qty, 0)
-      return { ...g, subtotal }
-    })
+    return {
+      sellers: Array.from(map.values()).map((group) => {
+        const subtotal = group.lines.reduce((sum, item) => {
+          if (item.blocked || !item.product || isOffline(group.seller)) return sum
+          return sum + unitPrice(item.product, item.line.variant) * item.line.qty
+        }, 0)
+        return { ...group, subtotal }
+      }),
+      loose,
+    }
   }, [cart, products, sellers])
 
-  const withShip = groups.filter((g) => !isOffline(g.seller)).map((g) => ({ ...g, shipping: shipFee(ship, g.subtotal) }))
-  const offlineGroups = groups.filter((g) => isOffline(g.seller))
+  const withShip = groups.sellers
+    .filter((group) => !isOffline(group.seller) && group.lines.some((item) => !item.blocked))
+    .map((group) => ({ ...group, shipping: shipFee(ship, group.subtotal) }))
+  const blockedSellerGroups = groups.sellers.filter((group) => !isOffline(group.seller) && group.lines.every((item) => item.blocked))
+  const offlineGroups = groups.sellers.filter((group) => isOffline(group.seller))
   const checked = withShip.filter((g) => !unpicked.includes(g.seller.id))
   const totalGoods = checked.reduce((s, g) => s + g.subtotal, 0)
   const totalShip = checked.reduce((s, g) => s + g.shipping, 0)
   const coupon = codeApplied ? coupons.find((c) => c.code === codeApplied) : undefined
-  const couponGroup = coupon ? checked.find((g) => g.seller.id === coupon.sellerId) : undefined
+  const couponGroup = coupon ? checked.find((g) => g.seller.id === coupon.sellerId || g.seller.userId === coupon.sellerId) : undefined
   const shortage = coupon && couponGroup ? Math.max(0, coupon.minSpend - couponGroup.subtotal) : 0
   const discount = coupon && couponGroup && shortage === 0 ? couponDiscount(coupon, couponGroup.subtotal, couponGroup.shipping) : 0
   const giftCoupon = coupon && couponGroup && shortage === 0 && kindOf(coupon) === 'gift' ? coupon : undefined
   const grand = totalGoods + totalShip - discount
-  const count = cart.reduce((s, l) => s + l.qty, 0)
+  const summary = cartCounts(cart)
 
   const applyCode = (preset?: string) => {
     const code = (preset ?? codeInput).trim().toUpperCase()
@@ -3723,7 +3810,7 @@ function CartModal({
     if ((c.listed || c.exclusive) && !ownedCodes.includes(c.code)) return setCodeError('此券需先在「天天簽到專區」兌換或透過幸運刮刮卡取得後才能使用（已使用或已過期的券無法再用）')
     if (!(c.listed || c.exclusive) && !ownedCodes.includes(c.code) && couponRemain(c) <= 0) return setCodeError('此折扣碼已被領完')
     const owner = sellers.find((s) => s.id === c.sellerId)
-    if (!withShip.some((g) => g.seller.id === c.sellerId)) return setCodeError(`此券僅限「${owner?.name ?? '指定店家'}」的商品使用，購物車內沒有該店商品`)
+    if (!withShip.some((g) => g.seller.id === c.sellerId || g.seller.userId === c.sellerId)) return setCodeError(`此券僅限「${owner?.name ?? '指定店家'}」的商品使用，購物車內沒有該店商品`)
     setCodeApplied(c.code)
   }
   const clearCode = () => {
@@ -3765,14 +3852,14 @@ function CartModal({
     setStep('done')
   }
 
-  const title = step === 'cart' ? `購物車（${count}）` : step === 'checkout' ? '結帳' : '訂單已成立'
+  const title = step === 'cart' ? `購物車（${summary.label}）` : step === 'checkout' ? '結帳' : '訂單已成立'
 
   return (
     <>
       <Modal title={title} onClose={onClose} size="lg" z={70}>
         {step === 'cart' && (
           <div className="space-y-4 p-5">
-            {groups.length === 0 ? (
+            {cart.length === 0 ? (
               <div className="flex flex-col items-center gap-3 py-14 text-center">
                 <ShoppingCart className="size-12 text-border" />
                 <p className="text-sm text-muted-foreground">購物車還是空的，去市集逛逛吧</p>
@@ -3802,28 +3889,48 @@ function CartModal({
                       <span className="ml-auto text-xs text-muted-foreground">{unpicked.includes(g.seller.id) ? '未勾選・本次不結帳' : `訂單 ${checked.indexOf(g) + 1}`}</span>
                     </header>
                     <ul className="divide-y divide-border/60">
-                      {g.lines.map(({ line, product }) => (
+                      {g.lines.filter((item) => !item.blocked && item.product).map(({ line, product }) => {
+                        const shown = product as Product
+                        const cap = maxLineOnHand(shown, line.variant, cart.filter((item) => item.productId === shown.id && item.key !== line.key))
+                        return (
                         <li key={line.key} className="flex gap-3 p-4">
                           <div className="size-20 shrink-0 overflow-hidden rounded-xl border border-border/70">
-                            <ProductImage src={product.image} alt={product.name} />
+                            <ProductImage src={shown.image} alt={shown.name} />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="line-clamp-2 text-sm font-bold">{product.name}</p>
-                            <p className="mt-0.5 text-xs text-muted-foreground">{Object.values(line.variant).join(' / ')}</p>
+                            <p className="line-clamp-2 text-sm font-bold">{shown.name}</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">{Object.values(line.variant).filter(Boolean).join(' / ') || '標準規格'}・數量 {line.qty} 件</p>
                             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                               <div className="inline-flex items-center rounded-full border border-border">
                                 <button type="button" aria-label="減少數量" className="rounded-l-full p-1.5 hover:bg-muted" onClick={() => onQty(line.key, -1)}>
                                   <Minus className="size-3.5" />
                                 </button>
                                 <span className="w-8 text-center text-sm font-bold">{line.qty}</span>
-                                <button type="button" aria-label="增加數量" className="rounded-r-full p-1.5 hover:bg-muted disabled:opacity-40" disabled={line.qty >= stockFor(product, line.variant)} onClick={() => onQty(line.key, 1)}>
+                                <button type="button" aria-label="增加數量" title="依共享庫存與規格庫存的欄位現貨上限。未扣除未到期保留，不是最終可售數量。" className="rounded-r-full p-1.5 hover:bg-muted disabled:opacity-40" disabled={cap == null || line.qty >= cap} onClick={() => onQty(line.key, 1)}>
                                   <Plus className="size-3.5" />
                                 </button>
                               </div>
-                              <p className="text-sm font-black text-brand-ink">{money(unitPrice(product, line.variant) * line.qty)}</p>
+                              <p className="text-sm font-black text-brand-ink">{money(unitPrice(shown, line.variant) * line.qty)}</p>
                             </div>
                           </div>
-                          <button type="button" aria-label={`移除 ${product.name}`} onClick={() => onRemove(line.key)} className="self-start rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive">
+                          <button type="button" aria-label={`移除 ${shown.name}`} onClick={() => onRemove(line.key)} className="self-start rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive">
+                            <Trash2 className="size-4" />
+                          </button>
+                        </li>
+                        )
+                      })}
+                      {g.lines.filter((item) => item.blocked).map(({ line, product, blocked }) => (
+                        <li key={line.key} className="flex gap-3 bg-red-500/5 p-4">
+                          <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70 opacity-60">
+                            <ProductImage src={product?.image || line.image || ''} alt={product?.name || line.name || '商品'} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="line-clamp-2 text-sm font-bold">{cartLineLabel(line, product)}</p>
+                            <p className="mt-1 flex items-start gap-1.5 text-xs font-bold text-red-400" role="status">
+                              <CircleAlert className="mt-0.5 size-3.5 shrink-0" />{blocked}
+                            </p>
+                          </div>
+                          <button type="button" aria-label={`移除 ${product?.name || line.name || '商品'}`} onClick={() => onRemove(line.key)} className="self-start rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive">
                             <Trash2 className="size-4" />
                           </button>
                         </li>
@@ -3856,33 +3963,85 @@ function CartModal({
                       {g.lines.map(({ line, product }) => (
                         <li key={line.key} className="flex gap-3 p-4">
                           <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70 opacity-50 grayscale">
-                            <ProductImage src={product.image} alt={product.name} />
+                            <ProductImage src={product?.image || line.image || ''} alt={product?.name || line.name || '商品'} />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="line-clamp-2 text-sm font-bold text-muted-foreground">{product.name}</p>
-                            <p className="mt-0.5 text-xs text-muted-foreground">{Object.values(line.variant).join(' / ')}・×{line.qty}</p>
+                            <p className="line-clamp-2 text-sm font-bold text-muted-foreground">{cartLineLabel(line, product)}</p>
+                            <p className="mt-1 text-xs font-bold text-red-400">休館中，不能結帳</p>
                           </div>
-                          <button type="button" aria-label={`移除 ${product.name}`} onClick={() => onRemove(line.key)} className="self-start rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive">
+                          <button type="button" aria-label={`移除 ${product?.name || line.name || '商品'}`} onClick={() => onRemove(line.key)} className="self-start rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive">
                             <Trash2 className="size-4" />
                           </button>
                         </li>
                       ))}
                     </ul>
                     <div className="flex flex-wrap gap-2 border-t border-destructive/20 px-4 py-3">
-                      <button type="button" className={btnGhost} onClick={() => onFindSimilar(g.lines[0].product.id)}>尋找類似商品</button>
+                      {g.lines[0]?.product && <button type="button" className={btnGhost} onClick={() => onFindSimilar(g.lines[0].product!.id)}>尋找類似商品</button>}
                       <button type="button" className={btnGhost} onClick={() => onMoveFollow(g.seller.id)}>移至追蹤</button>
                     </div>
                   </section>
                 ))}
+                {blockedSellerGroups.map((g) => (
+                  <section key={g.seller.id} className="overflow-hidden rounded-2xl border-2 border-destructive/40 bg-red-500/10" aria-label={`${g.seller.name} 目前不能結帳`}>
+                    <header className="flex flex-wrap items-center gap-2 border-b border-destructive/20 px-4 py-2.5">
+                      <Store className="size-4 text-destructive" />
+                      <button type="button" onClick={() => onOpenStore(g.seller.id)} className="text-sm font-black hover:underline">{g.seller.name}</button>
+                      <Pill tone="bad">不可結帳</Pill>
+                    </header>
+                    <ul className="divide-y divide-destructive/10">
+                      {g.lines.map(({ line, product, blocked }) => (
+                        <li key={line.key} className="flex gap-3 p-4">
+                          <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70 opacity-60">
+                            <ProductImage src={product?.image || line.image || ''} alt={product?.name || line.name || '商品'} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="line-clamp-2 text-sm font-bold">{cartLineLabel(line, product)}</p>
+                            <p className="mt-1 text-xs font-bold text-red-400" role="status">{blocked}</p>
+                          </div>
+                          <button type="button" aria-label={`移除 ${product?.name || line.name || '商品'}`} onClick={() => onRemove(line.key)} className="self-start rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive">
+                            <Trash2 className="size-4" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
+                {groups.loose.length > 0 && (
+                  <section className="overflow-hidden rounded-2xl border-2 border-destructive/40 bg-red-500/10" aria-label="無法確認賣家的商品">
+                    <header className="flex items-center gap-2 border-b border-destructive/20 px-4 py-2.5">
+                      <CircleAlert className="size-4 text-destructive" />
+                      <p className="text-sm font-black">無法確認賣家</p>
+                      <Pill tone="bad">不可結帳</Pill>
+                    </header>
+                    <ul className="divide-y divide-destructive/10">
+                      {groups.loose.map(({ line, product, blocked }) => (
+                        <li key={line.key} className="flex gap-3 p-4">
+                          <div className="min-w-0 flex-1">
+                            <p className="line-clamp-2 text-sm font-bold">{cartLineLabel(line, product)}</p>
+                            <p className="mt-1 text-xs font-bold text-red-400" role="status">{blocked}</p>
+                          </div>
+                          <button type="button" aria-label={`移除 ${product?.name || line.name || '商品'}`} onClick={() => onRemove(line.key)} className="self-start rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive">
+                            <Trash2 className="size-4" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+                {loggedIn && !remoteReady && (
+                  <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-500" role="status">
+                    購物車還沒有接到資料庫。上面如果看得到商品，是這個瀏覽器原本留下的清單，沒有被清空，也還沒寫入。
+                  </p>
+                )}
                 <div className="sticky bottom-0 -mx-5 -mb-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/70 bg-card/95 px-5 py-4 backdrop-blur">
                   <div>
-                    <p className="text-xs text-muted-foreground">已勾選 {checked.length} 筆訂單・合計（含運）</p>
+                    <p className="text-xs text-muted-foreground">已勾選 {checked.length} 筆可結帳訂單・合計（含運）・{summary.label}</p>
                     <p className="text-2xl font-black text-brand-ink">{money(grand)}</p>
                   </div>
                   <button
                     type="button"
                     className={`${btnPrimary} disabled:cursor-not-allowed disabled:opacity-50`}
-                    disabled={checked.length === 0}
+                    disabled={checked.length === 0 || (loggedIn && !remoteReady)}
                     onClick={() => (loggedIn ? setStep('checkout') : onNeedLogin())}
                   >
                     {loggedIn ? '前往結帳' : '登入後結帳'}
@@ -3968,19 +4127,17 @@ function CartModal({
                   ))}
                 </div>
                 {pay === 'card' ? (
-                  <>
-                    <CardFields value={card} onChange={setCard} errors={errors} />
-                    {payError && (
-                      <p className="flex items-center gap-1.5 rounded-xl bg-red-500/10 px-3 py-2 text-xs font-bold text-red-400" role="alert">
-                        <CircleAlert className="size-4 shrink-0" />{payError}
-                      </p>
-                    )}
-                  </>
+                  <CardFields value={card} onChange={setCard} errors={errors} />
                 ) : (
                   <div className="rounded-2xl bg-secondary p-4 text-sm leading-relaxed text-secondary-foreground">
-                    <p className="font-bold">送出訂單後將產生各賣家專屬的虛擬帳號</p>
-                    <p className="mt-1 text-xs">請於 3 日內完成轉帳，逾期訂單將自動取消；賣家確認收款後才會出貨。</p>
+                    <p className="font-bold">銀行轉帳尚未串接</p>
+                    <p className="mt-1 text-xs">現在送出不會建立訂單，也不會產生轉帳帳號或確認收款。</p>
                   </div>
+                )}
+                {payError && (
+                  <p className="flex items-center gap-1.5 rounded-xl bg-red-500/10 px-3 py-2 text-xs font-bold text-red-400" role="alert">
+                    <CircleAlert className="size-4 shrink-0" />{payError}
+                  </p>
                 )}
               </section>
             </div>
@@ -4020,7 +4177,7 @@ function CartModal({
                 )}
                 {!coupon && (
                   <button type="button" onClick={() => setPickerOpen(true)} className={`${btnGhost} w-full`}>
-                    <Ticket className="size-4" />選擇我的優惠券（{wallet.filter((w) => walletStatus(w) === 'unused' && groups.some((g) => g.seller.id === w.sellerId)).length}）
+                    <Ticket className="size-4" />選擇我的優惠券（{wallet.filter((w) => walletStatus(w) === 'unused' && withShip.some((g) => g.seller.id === w.sellerId || g.seller.userId === w.sellerId)).length}）
                   </button>
                 )}
                 {codeError && <p className="text-xs font-bold text-destructive" role="alert">{codeError}</p>}
@@ -4137,7 +4294,7 @@ function CartModal({
         <Modal title="選擇我的優惠券" onClose={() => setPickerOpen(false)} size="sm" z={80}>
           <div className="space-y-3 p-4">
             {(() => {
-              const mine = wallet.filter((w) => walletStatus(w) === 'unused' && groups.some((g) => g.seller.id === w.sellerId))
+              const mine = wallet.filter((w) => walletStatus(w) === 'unused' && withShip.some((g) => g.seller.id === w.sellerId || g.seller.userId === w.sellerId))
               if (!mine.length) {
                 return (
                   <div className="flex flex-col items-center gap-2 py-10 text-center">
@@ -4149,7 +4306,7 @@ function CartModal({
               return (
                 <ul className="space-y-2.5">
                   {mine.map((w) => {
-                    const g = groups.find((x) => x.seller.id === w.sellerId)!
+                    const g = withShip.find((x) => x.seller.id === w.sellerId || x.seller.userId === w.sellerId)!
                     const offline = isOffline(g.seller)
                     const lack = Math.max(0, w.minSpend - g.subtotal)
                     const usable = !offline && lack === 0
@@ -4323,7 +4480,7 @@ function BankSecureModal({
  * 買家中心
  * -------------------------------------------------------------------------- */
 
-type CenterTab = 'all' | 'unpaid' | 'toShip' | 'shipping' | 'done' | 'cancelled' | 'refund' | 'orderNotices' | 'coupons' | 'favorites' | 'following' | 'profile' | 'security' | 'support'
+type CenterTab = 'all' | 'unpaid' | 'toShip' | 'shipping' | 'done' | 'cancelled' | 'refund' | 'orderNotices' | 'coupons' | 'perks' | 'favorites' | 'following' | 'profile' | 'security' | 'support'
 
 const ORDER_BUCKETS = ['all', 'unpaid', 'toShip', 'shipping', 'done', 'cancelled', 'refund'] as const
 function isOrderBucket(tab: CenterTab): tab is BuyerOrderBucket {
@@ -4384,7 +4541,7 @@ function WalletPanel({ wallet, sellers, onGoStore }: { wallet: WalletEntry[]; se
         <div className="flex flex-col items-center gap-3 py-14 text-center">
           <Ticket className="size-12 text-border" />
           <p className="text-sm text-muted-foreground">
-            {filter === 'unused' ? '目前沒有可使用的優惠券，到「天天簽到專區」用點數兌換吧' : filter === 'used' ? '尚未使用過優惠券' : '沒有已過期的優惠券'}
+            {filter === 'unused' ? '目前沒有可使用的優惠券。可在賣場免費領取，或用 100 點兌換。' : filter === 'used' ? '正式結帳尚未開放，已領取的券不會被標成已於訂單使用' : '沒有已過期的優惠券'}
           </p>
         </div>
       ) : (
@@ -4399,9 +4556,10 @@ function WalletPanel({ wallet, sellers, onGoStore }: { wallet: WalletEntry[]; se
                   <span className="text-xl font-black">{couponBadge(w).value}</span>
                 </div>
                 <div className="min-w-0 flex-1 space-y-1 p-3 text-xs">
-                  <p className="truncate text-sm font-black">{sellers.find((s) => s.id === w.sellerId)?.name ?? '指定店家'}</p>
-                  <p className="break-all text-muted-foreground">折扣碼 <b className="font-mono text-foreground">{w.code}</b>・滿 {money(w.minSpend)} 可用</p>
-                  <p className="text-muted-foreground">有效期限至 {w.expiresAt.replace(/-/g, '/')}</p>
+                  <p className="truncate text-sm font-black">{w.sellerName || sellers.find((s) => s.userId === w.sellerId || s.id === w.sellerId)?.name || '指定店家'}</p>
+                  <p className="text-muted-foreground">{couponTitle(w)}・{walletSourceLabel(w.source)}</p>
+                  <p className="break-all text-muted-foreground">折扣碼 <b className="font-mono text-foreground">{w.code}</b>・使用條件：{couponTitle(w)}</p>
+                  <p className="text-muted-foreground">有效期限至 {w.expiresAt.replace(/-/g, '/')}。這個日期在領取當下確定，重新登入不會重算。</p>
                   {filter === 'unused' && (
                     <>
                       <p className={`font-bold ${soon ? 'text-amber-400' : 'text-emerald-400'}`}>{left <= 0 ? '今天到期' : `剩餘 ${left} 天`}</p>
@@ -4462,9 +4620,20 @@ function BuyerCenterModal({
   onReadTicket,
   onNotify,
   equipped,
+  ownedPerks,
+  points,
+  perkBusy = false,
+  onEquipPerk,
+  onOpenPerkShop,
   onNoticesChanged,
+  pointsLabel,
 }: {
   equipped: EquippedPerks
+  ownedPerks: string[]
+  points: number | null
+  perkBusy?: boolean
+  onEquipPerk: (id: string) => void
+  onOpenPerkShop: () => void
   onGoStore: (sellerId: string) => void
   favorites: string[]
   onToggleFav: (id: string) => void
@@ -4490,6 +4659,7 @@ function BuyerCenterModal({
   onReadTicket: (id: string) => void
   onNotify: (m: string) => void
   onNoticesChanged?: () => void
+  pointsLabel: string
   wallet: WalletEntry[]
   orders: Order[]
   products: Product[]
@@ -4510,15 +4680,41 @@ function BuyerCenterModal({
 }) {
   const [tab, setTab] = useState<CenterTab>('all')
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null)
-  const [doneCount, setDoneCount] = useState(0)
+  const [doneCount, setDoneCount] = useState<number | null>(null)
+  const [doneCountError, setDoneCountError] = useState(false)
+  const [gameBadge, setGameBadge] = useState<string | null>(null)
   const seller = (id: string) => sellers.find((s) => s.id === id)
   useEffect(() => {
     let stop = false
     void listMyBuyerOrders('done').then((result) => {
-      if (!stop && result.data) setDoneCount(result.data.length)
+      if (stop) return
+      if (result.error || !result.data) {
+        setDoneCount(null)
+        setDoneCountError(true)
+        return
+      }
+      setDoneCountError(false)
+      setDoneCount(result.data.length)
     })
     return () => { stop = true }
   }, [])
+  useEffect(() => {
+    if (!buyerUserId) {
+      setGameBadge(null)
+      return
+    }
+    let stop = false
+    void fetchPublicGameBadges([buyerUserId]).then((rows) => {
+      if (!stop) setGameBadge(rows?.[buyerUserId] ?? null)
+    })
+    return () => { stop = true }
+  }, [buyerUserId])
+  const identityTags = (
+    <>
+      <PerkTags equipped={equipped} />
+      <GameBadgeChip achievementId={gameBadge} />
+    </>
+  )
   void orders
 
   return (
@@ -4529,11 +4725,17 @@ function BuyerCenterModal({
           tone={tone}
           avatar={avatar}
           completed={doneCount}
+          completedError={doneCountError}
           onEdit={() => setTab('profile')}
           avatarNode={<PerkAvatar viewer={{ name: buyerName, tone, avatar }} equipped={equipped} />}
-          tags={<PerkTags equipped={equipped} />}
+          tags={identityTags}
           skinStyle={skinStyleFor(equipped)}
+          effect={<ProfileEffect id={equipped.effect} />}
         />
+        <div className="flex items-center justify-between border-b border-border/60 px-3 py-3 text-sm sm:px-6">
+          <span className="font-bold">我的點數</span>
+          <span className="text-lg font-black text-brand-ink">{pointsLabel}</span>
+        </div>
         <div className="sticky top-0 z-10 min-w-0 border-b border-border/60 bg-card px-3 py-2.5 sm:px-6 sm:py-3">
           <Tabs<CenterTab>
             variant="scroll"
@@ -4549,6 +4751,7 @@ function BuyerCenterModal({
               { id: 'refund', label: '退款' },
               { id: 'orderNotices', label: '訂單通知' },
               { id: 'coupons', label: '我的優惠券', badge: wallet.filter((w) => walletStatus(w) === 'unused').length },
+              { id: 'perks', label: '我的特權', badge: ownedPerks.length },
               { id: 'favorites', label: '我的收藏', badge: favorites.length },
               { id: 'following', label: '關注賣家', badge: followed.length },
               { id: 'profile', label: '個人資料' },
@@ -4611,11 +4814,17 @@ function BuyerCenterModal({
               canRename={canRename}
               nextRenameAt={nextRenameAt}
               completed={doneCount}
+              completedError={doneCountError}
               onRename={onRename}
               onAvatar={onAvatar}
               onSwitchSeller={onSwitchSeller}
               avatarNode={<PerkAvatar viewer={{ name: buyerName, tone, avatar }} equipped={equipped} size="size-20" textSize="text-3xl" />}
-              tags={<PerkTags equipped={equipped} large />}
+              tags={(
+                <>
+                  <PerkTags equipped={equipped} large />
+                  <GameBadgeChip achievementId={gameBadge} />
+                </>
+              )}
             />
             {myReviews.length === 0 ? (
               <p className="rounded-2xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">尚無評價紀錄。真實訂單完成並達到評價資格後，才會出現在這裡。</p>
@@ -4637,6 +4846,17 @@ function BuyerCenterModal({
             <SupportCenter role="buyer" author={buyerName} userId={buyerUserId} tickets={tickets} onSubmit={onSubmitTicket} onRead={onReadTicket} />
           ) : tab === 'coupons' ? (
             <WalletPanel wallet={wallet} sellers={sellers} onGoStore={onGoStore} />
+          ) : tab === 'perks' ? (
+            <MyPerksPanel
+              owned={ownedPerks}
+              equipped={equipped}
+              viewer={{ name: buyerName, tone, avatar }}
+              points={points}
+              busy={perkBusy}
+              onEquip={onEquipPerk}
+              onOpenShop={onOpenPerkShop}
+              extra={<GameBadgeChip achievementId={gameBadge} />}
+            />
           ) : tab === 'orderNotices' ? (
             <OrderNotifications
               onOpenOrder={(id) => {
@@ -5803,7 +6023,7 @@ function SmsNotifySettings({ prefs, onChange, log }: { prefs: SmsPrefs; onChange
           <h2 className="flex items-center gap-2 text-base font-black">
             <Smartphone className="size-5 text-brand-ink" />訂單簡訊通知
           </h2>
-          <Pill tone="ok"><Check className="size-3" />此功能已包含於 NT$599 月費方案中，不另收費</Pill>
+          <Pill tone="ok"><Check className="size-3" />此功能已包含於賣家月費，不另收費</Pill>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 rounded-xl bg-muted/60 p-4">
@@ -5832,7 +6052,7 @@ function SmsNotifySettings({ prefs, onChange, log }: { prefs: SmsPrefs; onChange
 
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-          此功能已包含於 NT$599 月費方案中，不另收費。
+          此功能已包含於賣家月費，不另收費。
         </p>
 
         <div className="space-y-2 border-t border-border/60 pt-4">
@@ -6346,13 +6566,15 @@ function SellerKycPanel({ seller }: { seller: Seller }) {
   const identityOk = seller.verify === 'approved'
   const identityLabel = seller.verify === 'approved' ? '平台已審核通過' : seller.verify === 'rejected' ? '平台已退回' : '等待平台人工審核'
   const step = (ok: boolean, title: string, desc: string, status: string) => (
-    <li className="flex flex-wrap items-center gap-3 rounded-2xl border border-border/70 p-3">
-      <span className={`flex size-8 shrink-0 items-center justify-center rounded-full ${ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
-        {ok ? <Check className="size-4" /> : <ShieldAlert className="size-4" />}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold">{title}</p>
-        <p className="text-xs text-muted-foreground">{desc}</p>
+    <li className="flex flex-col gap-2 rounded-2xl border border-border/70 p-3 min-[600px]:flex-row min-[600px]:items-center min-[600px]:gap-3">
+      <div className="flex min-w-0 items-start gap-3 min-[600px]:flex-1">
+        <span className={`flex size-8 shrink-0 items-center justify-center rounded-full ${ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+          {ok ? <Check className="size-4" /> : <ShieldAlert className="size-4" />}
+        </span>
+        <div className="min-w-0">
+          <p className="break-words text-sm font-bold">{title}</p>
+          <p className="break-words text-xs leading-relaxed text-muted-foreground">{desc}</p>
+        </div>
       </div>
       <Pill tone={ok ? 'ok' : 'neutral'}>{status}</Pill>
     </li>
@@ -6405,8 +6627,8 @@ function SellerExportPanel({
       {logs.length > 0 && (
         <ul className="divide-y divide-border/60 rounded-2xl border border-border/70 text-xs">
           {logs.map((l) => (
-            <li key={l.id} className="flex items-center justify-between gap-2 px-3 py-2">
-              <span className="font-bold">{l.kind === 'products' ? '商品清單' : '訂單明細'}・{l.rows} 筆</span>
+            <li key={l.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2">
+              <span className="min-w-0 break-words font-bold">{l.kind === 'products' ? '商品清單' : '訂單明細'}・{l.rows} 筆</span>
               <span className="text-muted-foreground">{l.at}</span>
             </li>
           ))}
@@ -7001,8 +7223,8 @@ function SellerDashboard({
   onReadTicket: (id: string) => void
   onNotify: (m: string) => void
   coupons: Coupon[]
-  onCreateCoupon: (d: CouponDraft) => string | null
-  onUpdateCoupon: (id: string, d: CouponDraft) => string | null
+  onCreateCoupon: (d: CouponDraft) => string | null | Promise<string | null>
+  onUpdateCoupon: (id: string, d: CouponDraft) => string | null | Promise<string | null>
   onToggleCouponActive: (id: string) => void
   onToggleCoupon: (id: string) => void
   onToggleCouponShelf: (id: string) => void
@@ -7089,7 +7311,48 @@ function SellerDashboard({
   const [delistTarget, setDelistTarget] = useState<{ id: string; name: string } | null>(null)
   const billingReady = seller.plan.billingLinked === true
   const closed = billingReady && isClosed(seller)
+  const [subscription, setSubscription] = useState<SubscriptionView | null>(null)
+  const [subscriptionError, setSubscriptionError] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    void supabase.rpc('get_my_seller_subscription').then(({ data, error }) => {
+      if (cancelled) return
+      if (error) {
+        setSubscription(null)
+        setSubscriptionError(error.message)
+        return
+      }
+      setSubscriptionError('')
+      setSubscription(data as SubscriptionView)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const subscriptionLabel = subscriptionError ? '無法讀取方案狀態' : subscription?.label ?? '讀取方案中'
+  const subscriptionLines = subscription ? eligibilityText(subscription) : null
+  const [reminders, setReminders] = useState<SubscriptionReminder[] | null>(null)
+  const [reminderError, setReminderError] = useState('')
+  const loadReminders = useCallback(async () => {
+    const result = await loadMySubscriptionReminders()
+    setReminderError(result.error)
+    setReminders(result.rows)
+  }, [])
+  useEffect(() => {
+    void loadReminders()
+  }, [loadReminders])
+  const markRemindersRead = async () => {
+    const message = await markMySubscriptionRemindersRead()
+    if (message) {
+      setReminderError(message)
+      return
+    }
+    await loadReminders()
+  }
   const unreadNotices = notices.filter((n) => !n.read)
+  const reminderUnread = (reminders ?? []).filter((row) => !row.readAt).length
+  const noticeUnread = unreadNotices.length + reminderUnread
+  const noticeHeadline = unreadNotices[0]?.title ?? (reminders ?? []).find((row) => !row.readAt)?.title ?? ''
   const [appealTarget, setAppealTarget] = useState<{ kind: 'product' | 'ban' | 'seller'; productId?: string; name: string } | null>(null)
   const productAppeal = (productId?: string) => appeals.find((a) => a.kind === 'product' && a.productId === productId)
   const banAppeal = appeals.find((a) => a.kind === 'ban')
@@ -7135,7 +7398,6 @@ function SellerDashboard({
   }
 
   const myProducts = products.filter((p) => !!productOwnerId && p.sellerId === productOwnerId)
-  const plan = planLabel[seller.plan.status]
 
   if (seller.suspended) {
     return (
@@ -7160,115 +7422,136 @@ function SellerDashboard({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-5">
       {appealTarget && (
         <AppealModal kind={appealTarget.kind} targetName={appealTarget.name} onClose={() => setAppealTarget(null)} onSubmit={submitAppeal} />
       )}
       {sellerReportsOpen > 0 && (
-        <div role="status" className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm">
-          <Flag className="size-5 shrink-0 text-amber-400" />
-          <p className="min-w-0 flex-1 text-pretty font-bold leading-relaxed text-amber-300">
-            您的賣場有 {sellerReportsOpen} 筆檢舉正在人工審核中，賣場仍正常營運。若認為檢舉不實，可提出申訴並回覆說明。
-          </p>
+        <div role="status" className="flex flex-col gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm min-[600px]:flex-row min-[600px]:items-center">
+          <div className="flex min-w-0 items-start gap-3 min-[600px]:flex-1">
+            <Flag className="mt-0.5 size-5 shrink-0 text-amber-400" />
+            <p className="min-w-0 break-words text-pretty font-bold leading-relaxed text-amber-300">
+              您的賣場有 {sellerReportsOpen} 筆檢舉正在人工審核中，賣場仍正常營運。若認為檢舉不實，可提出申訴並回覆說明。
+            </p>
+          </div>
           {sellerAppeal ? (
             <AppealStatusBlock appeal={sellerAppeal} />
           ) : (
-            <button type="button" onClick={() => setAppealTarget({ kind: 'seller', name: seller.name })} className={`${btnGhost} px-3 py-1.5 text-xs`}>
+            <button type="button" onClick={() => setAppealTarget({ kind: 'seller', name: seller.name })} className={`${btnGhost} shrink-0 self-start whitespace-nowrap px-3 py-1.5 text-xs min-[600px]:self-center`}>
               <Megaphone className="size-3.5" />申訴 / 回覆
             </button>
           )}
         </div>
       )}
-      <div className={`${panelCls} flex flex-wrap items-center gap-4 p-4`}>
-        <Avatar seller={seller} size="size-14" />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-lg font-black">{seller.name}</h1>
-            {seller.verify === 'approved' && <VerifiedBadge label />}
-            <FounderBadge seller={seller} />
-            {seller.verify === 'pending' && <Pill tone="warn"><Clock className="size-3" />待平台審核</Pill>}
-            {seller.verify === 'rejected' && <Pill tone="bad"><Ban className="size-3" />審核退回</Pill>}
+      <div className={`${panelCls} p-4`}>
+        <div className="flex flex-col gap-3 min-[600px]:flex-row min-[600px]:flex-wrap min-[600px]:items-center min-[600px]:gap-4">
+          <div className="flex min-w-0 items-center gap-3 min-[600px]:min-w-[min(100%,16rem)] min-[600px]:flex-[1_1_16rem]">
+            <Avatar seller={seller} size="size-14" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h1 className="min-w-[min(100%,6rem)] max-w-full break-words text-lg font-black leading-snug">{seller.name}</h1>
+                {seller.verify === 'approved' && <VerifiedBadge label />}
+                <FounderBadge seller={seller} />
+                {seller.verify === 'pending' && <Pill tone="warn"><Clock className="size-3" />待平台審核</Pill>}
+                {seller.verify === 'rejected' && <Pill tone="bad"><Ban className="size-3" />審核退回</Pill>}
+              </div>
+              <p className="mt-0.5 break-words text-sm leading-relaxed text-muted-foreground">店家後台・負責人 {seller.owner || '尚未填寫'}{seller.idNo ? `・證件 ${maskId(seller.idNo)}` : ''}</p>
+            </div>
           </div>
-          <p className="text-sm text-muted-foreground">店家後台・負責人 {seller.owner || '尚未填寫'}{seller.idNo ? `・證件 ${maskId(seller.idNo)}` : ''}</p>
+          <div className="flex max-w-full flex-wrap items-center gap-2 min-[600px]:shrink-0">
+            {sellerApproved && onViewStore && (
+              <button type="button" onClick={onViewStore} className={`${btnPrimary} shrink-0 whitespace-nowrap`}>
+                <Store className="size-4" />查看我的賣場
+              </button>
+            )}
+            <Pill tone={subscription?.canStartNewTrade === false ? 'warn' : 'neutral'}>{subscriptionLabel}</Pill>
+          </div>
         </div>
-        {sellerApproved && onViewStore && (
-          <button type="button" onClick={onViewStore} className={btnPrimary}>
-            <Store className="size-4" />查看我的賣場
-          </button>
-        )}
-        <Pill tone={billingReady ? plan.tone : 'neutral'}>{billingReady ? plan.text : '月費功能建置中'}</Pill>
       </div>
 
       {billingReady && closed && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl bg-destructive p-4 text-sm font-bold text-card shadow-sm">
-          <CircleAlert className="size-5 shrink-0" />
-          <p className="min-w-0 flex-1">您的月費已於 {fmtDate(seller.plan.nextDate)} 到期，系統已自動暫停您的賣場營業與商品刊登！</p>
-          <button type="button" onClick={() => setTab('plan')} className="inline-flex items-center justify-center gap-1.5 rounded-full bg-card px-5 py-2 text-sm font-bold text-destructive transition hover:brightness-95 active:scale-[0.98]">
+        <div role="alert" className="flex flex-col gap-3 rounded-2xl bg-destructive p-4 text-sm font-bold text-card shadow-sm min-[600px]:flex-row min-[600px]:items-center">
+          <div className="flex min-w-0 items-start gap-3 min-[600px]:flex-1">
+            <CircleAlert className="mt-0.5 size-5 shrink-0" />
+            <p className="min-w-0 break-words">您的月費已於 {fmtDate(seller.plan.nextDate)} 到期，系統已自動暫停您的賣場營業與商品刊登！</p>
+          </div>
+          <button type="button" onClick={() => setTab('plan')} className="inline-flex max-w-full shrink-0 items-center justify-center gap-1.5 self-start whitespace-normal rounded-full bg-card px-5 py-2 text-center text-sm font-bold text-destructive transition hover:brightness-95 active:scale-[0.98] min-[600px]:self-center">
             立即續費 {money(PLAN_TOTAL)}（含稅）
           </button>
         </div>
       )}
 
       {billingReady && seller.plan.status === 'grace' && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm font-bold text-amber-300">
-          <TriangleAlert className="size-5 shrink-0" />
-          <p className="min-w-0 flex-1 text-pretty">
-            本月月費（{money(PLAN_TOTAL)}，含 5% 營業稅）扣款失敗！已進入 {GRACE_DAYS} 天補繳緩衝期（剩餘 {graceLeft(seller.plan)} 天），請儘速更新信用卡資訊以維持店鋪營運。
-          </p>
-          <button type="button" onClick={() => setTab('plan')} className={btnPrimary}>查看月費狀態</button>
+        <div role="alert" className="flex flex-col gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm font-bold text-amber-300 min-[600px]:flex-row min-[600px]:items-center">
+          <div className="flex min-w-0 items-start gap-3 min-[600px]:flex-1">
+            <TriangleAlert className="mt-0.5 size-5 shrink-0" />
+            <p className="min-w-0 break-words text-pretty">
+              本月月費（{money(PLAN_TOTAL)}，含 5% 營業稅）扣款失敗！已進入 {GRACE_DAYS} 天補繳緩衝期（剩餘 {graceLeft(seller.plan)} 天），請儘速更新信用卡資訊以維持店鋪營運。
+            </p>
+          </div>
+          <button type="button" onClick={() => setTab('plan')} className={`${btnPrimary} shrink-0 self-start whitespace-nowrap min-[600px]:self-center`}>查看月費狀態</button>
         </div>
       )}
 
-      {unreadNotices.length > 0 && tab !== 'notices' && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-destructive/40 bg-accent p-4 text-sm">
-          <Bell className="size-5 shrink-0 text-destructive" />
-          <div className="min-w-0 flex-1">
-            <p className="font-black text-destructive">您有 {unreadNotices.length} 則未讀的平台通知</p>
-            <p className="truncate text-muted-foreground">{unreadNotices[0].title}</p>
+      {noticeUnread > 0 && tab !== 'notices' && (
+        <div role="alert" className="flex flex-col gap-3 rounded-2xl border border-destructive/40 bg-accent p-4 text-sm min-[600px]:flex-row min-[600px]:items-center">
+          <div className="flex min-w-0 items-start gap-3 min-[600px]:flex-1">
+            <Bell className="mt-0.5 size-5 shrink-0 text-destructive" />
+            <div className="min-w-0">
+              <p className="break-words font-black text-destructive">您有 {noticeUnread} 則未讀的平台通知</p>
+              <p className="break-words text-muted-foreground">{noticeHeadline}</p>
+            </div>
           </div>
-          <button type="button" onClick={() => setTab('notices')} className={btnPrimary}>查看通知</button>
+          <button type="button" onClick={() => setTab('notices')} className={`${btnPrimary} shrink-0 self-start whitespace-nowrap min-[600px]:self-center`}>查看通知</button>
         </div>
       )}
 
       {seller.verify === 'pending' && (
         <div className="flex items-start gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm text-amber-300">
           <Clock className="mt-0.5 size-5 shrink-0" />
-          <p>您的實名資料已送出，狀態為「待平台審核」。通過前商品不會顯示於前台市集，審核通過後才會上架。</p>
+          <p className="min-w-0 break-words">您的實名資料已送出，狀態為「待平台審核」。通過前商品不會顯示於前台市集，審核通過後才會上架。</p>
         </div>
       )}
       {seller.verify === 'rejected' && (
-        <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-red-500/35 bg-red-500/10 p-4 text-sm text-red-300">
-          <CircleAlert className="mt-0.5 size-5 shrink-0" />
-          <p className="min-w-0 flex-1">實名審核被退回：{seller.rejectReason || '證件資訊不清晰'}。請重新上傳後送審。</p>
-          <button type="button" onClick={onResubmit} className={btnPrimary}>重新送審</button>
+        <div className="flex flex-col gap-3 rounded-2xl border border-red-500/35 bg-red-500/10 p-4 text-sm text-red-300 min-[600px]:flex-row min-[600px]:items-center">
+          <div className="flex min-w-0 items-start gap-3 min-[600px]:flex-1">
+            <CircleAlert className="mt-0.5 size-5 shrink-0" />
+            <p className="min-w-0 break-words">實名審核被退回：{seller.rejectReason || '證件資訊不清晰'}。請重新上傳後送審。</p>
+          </div>
+          <button type="button" onClick={onResubmit} className={`${btnPrimary} shrink-0 self-start whitespace-nowrap min-[600px]:self-center`}>重新送審</button>
         </div>
       )}
       {billingReady && seller.plan.status === 'due' && seller.verify === 'approved' && (
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm text-amber-300">
-          <Receipt className="size-5 shrink-0" />
-          <p className="min-w-0 flex-1">本期月費 {money(PLAN_TOTAL)}（含 5% 營業稅）尚未繳納（應繳日 {seller.plan.nextDate}），逾期將暫停上架權限。</p>
-          <button type="button" onClick={() => setTab('plan')} className={btnPrimary}>查看月費狀態</button>
+        <div className="flex flex-col gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-4 text-sm text-amber-300 min-[600px]:flex-row min-[600px]:items-center">
+          <div className="flex min-w-0 items-start gap-3 min-[600px]:flex-1">
+            <Receipt className="mt-0.5 size-5 shrink-0" />
+            <p className="min-w-0 break-words">本期月費 {money(PLAN_TOTAL)}（含 5% 營業稅）尚未繳納（應繳日 {seller.plan.nextDate}），逾期將暫停上架權限。</p>
+          </div>
+          <button type="button" onClick={() => setTab('plan')} className={`${btnPrimary} shrink-0 self-start whitespace-nowrap min-[600px]:self-center`}>查看月費狀態</button>
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div className={`${hoverPanelCls} flex flex-col items-start gap-2.5 p-3.5 md:flex-row md:items-center md:gap-3 md:p-4`}>
+      <div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-4">
+        <div className={`${hoverPanelCls} flex min-w-0 flex-col items-start gap-2.5 p-3.5 md:flex-row md:items-center md:gap-3 md:p-4`}>
           <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-brand-ink md:size-10"><Package className="size-5" /></span>
           <div className="min-w-0">
             <p className="text-xs text-muted-foreground">前台上架商品</p>
-            <p className="text-base font-black">{closed ? 0 : myProducts.filter((p) => p.active && !p.draft && !p.flagged && !priceReviewBlocksPublic(p)).length}</p>
+            <p className="break-words text-base font-black">{closed ? 0 : myProducts.filter((p) => p.active && !p.draft && !p.flagged && !priceReviewBlocksPublic(p)).length}</p>
           </div>
         </div>
         <SellerSnapshotCards />
-        <div className={`${hoverPanelCls} flex flex-col items-start gap-2.5 p-3.5 md:flex-row md:items-center md:gap-3 md:p-4`}>
+        <div className={`${hoverPanelCls} flex min-w-0 flex-col items-start gap-2.5 p-3.5 md:flex-row md:items-center md:gap-3 md:p-4`}>
           <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-brand-ink md:size-10"><Wallet className="size-5" /></span>
           <div className="min-w-0">
             <p className="text-xs text-muted-foreground">方案狀態</p>
-            <p className="text-base font-black">{plan.text}</p>
+            <p className="break-words text-base font-black">{subscriptionLabel}</p>
+            {subscriptionLines && <p className="break-words text-xs text-muted-foreground">{subscriptionLines.qualification}</p>}
+            {subscriptionLines && <p className="break-words text-xs text-muted-foreground">{subscriptionLines.checkout}</p>}
           </div>
         </div>
       </div>
 
+      <div className="min-w-0 max-w-full">
       <Tabs
         value={tab}
         onChange={setTab}
@@ -7278,7 +7561,7 @@ function SellerDashboard({
           { id: 'reports', label: '營運報表', icon: <TrendingUp className="size-4" /> },
           { id: 'messages', label: '買家訊息', icon: <MessageCircle className="size-4" />, badge: chatUnread },
           { id: 'coupons', label: '優惠券管理', icon: <Ticket className="size-4" /> },
-          { id: 'notices', label: '通知中心', icon: <Bell className="size-4" />, badge: unreadNotices.length },
+          { id: 'notices', label: '通知中心', icon: <Bell className="size-4" />, badge: noticeUnread },
           { id: 'plan', label: '方案與月費管理', icon: <Wallet className="size-4" />, badge: seller.plan.status === 'due' || seller.plan.status === 'grace' || closed ? 1 : 0 },
           { id: 'account', label: '帳號設定', icon: <Settings className="size-4" /> },
           { id: 'storefront', label: '賣場裝潢', icon: <Store className="size-4" /> },
@@ -7286,13 +7569,14 @@ function SellerDashboard({
           { id: 'support', label: '客服中心', icon: <Mail className="size-4" />, badge: tickets.filter((t) => t.unread).length },
         ]}
       />
+      </div>
 
       {tab === 'coupons' && (
         <>
           <CouponList
             coupons={coupons}
             today={todayStr()}
-            listedCount={coupons.filter((c) => c.listed && c.active).length}
+            listedCount={coupons.filter((c) => c.listed && c.active && couponStatus(c, todayStr()) !== 'expired').length}
             maxListed={MAX_LISTED_COUPONS}
             onCreate={guard('建立折價券', () => setCouponFormOpen(true))}
             onEdit={(id) => guard('編輯折價券', () => setEditCouponId(id))()}
@@ -7301,17 +7585,18 @@ function SellerDashboard({
   onToggleShelf={(id) => guard('調整賣場領取', () => onToggleCouponShelf(id))()}
             onDelete={(id) => guard('刪除折價券', () => onDeleteCoupon(id))()}
           />
+          {sellerApproved && <CouponPointOffers coupons={coupons} today={todayStr()} uiUserId={productOwnerId ?? null} onNotify={onNotify} />}
           {editCouponId && coupons.some((c) => c.id === editCouponId) && (
             <Modal title="編輯折價券" size="md" onClose={() => setEditCouponId(null)}>
               <CouponForm
                 key={editCouponId}
                 today={todayStr()}
                 initial={coupons.find((c) => c.id === editCouponId)}
-                listedCount={coupons.filter((c) => c.listed && c.active && c.id !== editCouponId).length}
+                listedCount={coupons.filter((c) => c.listed && c.active && c.id !== editCouponId && couponStatus(c, todayStr()) !== 'expired').length}
                 maxListed={MAX_LISTED_COUPONS}
                 redeemCost={DEFAULT_REDEEM_COST}
-                onSubmit={(d) => {
-                  const err = onUpdateCoupon(editCouponId, d)
+                onSubmit={async (draft) => {
+                  const err = await onUpdateCoupon(editCouponId, draft)
                   if (!err) setEditCouponId(null)
                   return err
                 }}
@@ -7323,11 +7608,11 @@ function SellerDashboard({
             <Modal title="新增折價券" size="md" onClose={() => setCouponFormOpen(false)}>
               <CouponForm
                 today={todayStr()}
-                listedCount={coupons.filter((c) => c.listed && c.active).length}
+                listedCount={coupons.filter((c) => c.listed && c.active && couponStatus(c, todayStr()) !== 'expired').length}
                 maxListed={MAX_LISTED_COUPONS}
                 redeemCost={DEFAULT_REDEEM_COST}
-                onSubmit={(d) => {
-                  const err = onCreateCoupon(d)
+                onSubmit={async (draft) => {
+                  const err = await onCreateCoupon(draft)
                   if (!err) setCouponFormOpen(false)
                   return err
                 }}
@@ -7340,6 +7625,7 @@ function SellerDashboard({
 
       {tab === 'notices' && (
         <div className="space-y-5">
+          <SellerSubscriptionReminderList rows={reminders} error={reminderError} onMarkRead={() => void markRemindersRead()} />
           <OrderNotifications
             onOpenOrder={(id) => {
               setFocusOrderId(id)
@@ -7410,40 +7696,45 @@ function SellerDashboard({
       {tab === 'products' && (
         <section className="space-y-3" aria-label="商品管理">
           <LegalBanner />
-          <section aria-label="一鍵商品搬家" className={`${panelCls} flex flex-wrap items-center gap-4 border-primary/40 p-4`}>
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary/15 text-brand-ink">
-              <FileSpreadsheet className="size-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-black">一鍵商品搬家｜從蝦皮匯入商品</h3>
-              <p className="mt-0.5 text-pretty text-xs leading-relaxed text-muted-foreground">
-                上傳符合平台欄位的 CSV。這不是蝦皮 API，也不會自動同步。確認後才寫入自己的商品；超過 {money(REVIEW_PRICE_LIMIT)} 由資料庫送審。
-              </p>
+          <section aria-label="一鍵商品搬家" className={`${panelCls} flex flex-col gap-3 border-primary/40 p-4 min-[600px]:flex-row min-[600px]:items-center min-[600px]:gap-4`}>
+            <div className="flex min-w-0 items-start gap-3 min-[600px]:flex-1 min-[600px]:items-center">
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary/15 text-brand-ink">
+                <FileSpreadsheet className="size-5" />
+              </span>
+              <div className="min-w-0">
+                <h3 className="break-words text-sm font-black">一鍵商品搬家｜從蝦皮匯入商品</h3>
+                <p className="mt-0.5 break-words text-xs leading-relaxed text-muted-foreground">
+                  上傳符合平台欄位的 CSV。這不是蝦皮 API，也不會自動同步。確認後才寫入自己的商品；超過 {money(REVIEW_PRICE_LIMIT)} 由資料庫送審。
+                </p>
+              </div>
             </div>
-            <button type="button" onClick={guard('一鍵商品搬家', () => setMigrating(true))} className={btnPrimary}>
+            <button type="button" onClick={guard('一鍵商品搬家', () => setMigrating(true))} className={`${btnPrimary} shrink-0 self-start whitespace-nowrap min-[600px]:self-center`}>
               <Upload className="size-4" />開始搬家
             </button>
           </section>
-          <div className="flex items-center justify-between">
-            <div>
+          <div className="flex flex-col items-start gap-3 min-[600px]:flex-row min-[600px]:items-center min-[600px]:justify-between">
+            <div className="min-w-0">
               <h2 className="text-base font-black">我的商品（{myProducts.length}）</h2>
-              <p className="text-xs text-muted-foreground">已售出件數只計算有效完成交易。目前沒有可信成交時顯示 0，不會採用舊的展示數字，也不會清掉資料庫裡的 sold 欄位。</p>
+              <p className="break-words text-xs leading-relaxed text-muted-foreground">已售出件數只計算有效完成交易。目前沒有可信成交時顯示 0，不會採用舊的展示數字，也不會清掉資料庫裡的 sold 欄位。</p>
             </div>
-            <button type="button" onClick={guard('新增商品', () => setEditing('new'))} className={btnPrimary}><Plus className="size-4" />上架新商品</button>
+            <button type="button" onClick={guard('新增商品', () => setEditing('new'))} className={`${btnPrimary} shrink-0 whitespace-nowrap`}><Plus className="size-4" />上架新商品</button>
           </div>
           {myProducts.length === 0 ? (
             <p className={`${panelCls} p-10 text-center text-sm text-muted-foreground`}>還沒有商品，點右上角開始上架</p>
           ) : (
             <ul className="space-y-3">
               {myProducts.map((p) => (
-                <li key={p.id} className={`${hoverPanelCls} flex flex-wrap items-center gap-4 p-3`}>
-                  <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70"><ProductImage src={p.image} alt={p.name} /></div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold">{p.name}</p>
-                    <p className="text-xs text-muted-foreground">{p.category}・{soldLabel(p)}</p>
+                <li key={p.id} className={`${hoverPanelCls} flex flex-col gap-3 p-3 min-[600px]:flex-row min-[600px]:flex-wrap min-[600px]:items-center`}>
+                  <div className="flex min-w-0 items-center gap-3 min-[600px]:min-w-56 min-[600px]:flex-1">
+                    <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-border/70"><ProductImage src={p.image} alt={p.name} /></div>
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words text-sm font-bold leading-snug">{p.name}</p>
+                      <p className="break-words text-xs leading-relaxed text-muted-foreground">{p.category}・{soldLabel(p)}</p>
+                    </div>
                   </div>
-                  <p className="w-24 text-sm font-black text-brand-ink">{money(p.price)}</p>
-                  <p className={`w-20 text-sm font-bold ${p.stock <= 5 ? 'text-destructive' : ''}`}>庫存 {p.stock}</p>
+                  <div className="flex max-w-full flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <p className="shrink-0 text-sm font-black text-brand-ink">{money(p.price)}</p>
+                  <p className={`shrink-0 text-sm font-bold ${p.stock <= 5 ? 'text-destructive' : ''}`}>庫存 {p.stock}</p>
                   <span className="shrink-0">
                     {p.draft ? (
                       <Pill tone="warn"><Eye className="size-3" />草稿・尚未發佈</Pill>
@@ -7467,13 +7758,14 @@ function SellerDashboard({
                     const { ap, button } = renderProductAppeal(p.id, p.name, '申訴')
                     return ap ? <Pill tone={appealStatusMeta[ap.status].tone}>{appealStatusMeta[ap.status].text}</Pill> : button
                   })()}
-                  <div className="flex gap-1.5">
-                    <button type="button" onClick={() => setPreviewId(p.id)} className={`${btnGhost} px-3`} aria-label={`預覽 ${p.name}`}><Eye className="size-4" /></button>
+                  </div>
+                  <div className="flex max-w-full flex-wrap gap-1.5">
+                    <button type="button" onClick={() => setPreviewId(p.id)} className={`${btnGhost} shrink-0 px-3`} aria-label={`預覽 ${p.name}`}><Eye className="size-4" /></button>
                     {p.draft && (
-                      <button type="button" onClick={guard('發佈商品', () => onPublishProduct(p.id))} className={`${btnPrimary} px-3.5 text-xs`}><Send className="size-4" />發佈商品</button>
+                      <button type="button" onClick={guard('發佈商品', () => onPublishProduct(p.id))} className={`${btnPrimary} shrink-0 whitespace-nowrap px-3.5 text-xs`}><Send className="size-4" />發佈商品</button>
                     )}
                     {!p.draft && p.active && (
-                      <button type="button" onClick={guard('下架商品', () => setDelistTarget({ id: p.id, name: p.name }))} className={`${btnGhost} px-3.5 text-xs`}>下架商品</button>
+                      <button type="button" onClick={guard('下架商品', () => setDelistTarget({ id: p.id, name: p.name }))} className={`${btnGhost} shrink-0 whitespace-nowrap px-3.5 text-xs`}>下架商品</button>
                     )}
                     {!p.draft && !p.active && (
                       <button
@@ -7493,18 +7785,18 @@ function SellerDashboard({
                           }
                           void onSetProductActive(p.id, true)
                         })}
-                        className={`${btnPrimary} px-3.5 text-xs`}
+                        className={`${btnPrimary} shrink-0 whitespace-nowrap px-3.5 text-xs`}
                       >
                         重新上架
                       </button>
                     )}
                     {priceReviewRejected(p) && (
-                      <button type="button" disabled={resubmitBusyId !== null} onClick={guard('重新送審', () => resubmitProduct(p.id))} className={`${btnPrimary} px-3.5 text-xs disabled:cursor-not-allowed disabled:opacity-50`}>
+                      <button type="button" disabled={resubmitBusyId !== null} onClick={guard('重新送審', () => resubmitProduct(p.id))} className={`${btnPrimary} shrink-0 whitespace-nowrap px-3.5 text-xs disabled:cursor-not-allowed disabled:opacity-50`}>
                         {resubmitBusyId === p.id ? '送審中' : '重新送審'}
                       </button>
                     )}
-                    <button type="button" onClick={guard('編輯商品', () => setEditing(p))} className={`${btnGhost} px-3`} aria-label={`編輯 ${p.name}`}><Pencil className="size-4" /></button>
-                    <button type="button" onClick={guard('刪除商品', () => onDeleteProduct(p.id))} className={`${btnGhost} px-3 hover:text-destructive`} aria-label={`刪除 ${p.name}`}><Trash2 className="size-4" /></button>
+                    <button type="button" onClick={guard('編輯商品', () => setEditing(p))} className={`${btnGhost} shrink-0 px-3`} aria-label={`編輯 ${p.name}`}><Pencil className="size-4" /></button>
+                    <button type="button" onClick={guard('刪除商品', () => onDeleteProduct(p.id))} className={`${btnGhost} shrink-0 px-3 hover:text-destructive`} aria-label={`刪除 ${p.name}`}><Trash2 className="size-4" /></button>
                   </div>
                 </li>
               ))}
@@ -7563,18 +7855,7 @@ function SellerDashboard({
         />
       )}
 
-      {tab === 'plan' && (
-        <section className="space-y-4" aria-label="方案與月費管理">
-          <div className={`${panelCls} space-y-3 p-5`}>
-            <p className="text-xs font-bold text-muted-foreground">目前方案</p>
-            <h2 className="text-xl font-black">月費功能建置中</h2>
-            <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
-              訂閱、30 天試用、自動扣款與綠界付款都尚未串接資料庫。這裡不會把賣場顯示成已繳費或試用有效，也不會因月費自動關店。商品仍可依審核狀態上架。綠界串接完成後，會在這個分頁接上真實繳費狀態。
-            </p>
-            <p className="text-sm font-bold">參考月費 {money(PLAN_TOTAL)} / 月（含稅），目前不能付款。</p>
-          </div>
-        </section>
-      )}
+      {tab === 'plan' && <SellerSubscriptionPanel onNotify={onNotify} />}
 
       {editing && (
         <ProductFormModal
@@ -7947,7 +8228,7 @@ function AdminDashboard({
   onConfirmVerify: (id: string) => void
   onRemind: (id: string) => void
 }) {
-  const [tab, setTab] = useState<'board' | 'review' | 'fees' | 'risk' | 'listing' | 'tickets' | 'announce'>('board')
+  const [tab, setTab] = useState<'board' | 'review' | 'fees' | 'risk' | 'listing' | 'tickets' | 'announce' | 'festival'>('board')
   const [filter, setFilter] = useState<'all' | VerifyStatus>('all')
   const [reviewing, setReviewing] = useState<string | null>(null)
   const [banConfirm, setBanConfirm] = useState<string | null>(null)
@@ -8003,8 +8284,11 @@ function AdminDashboard({
           { id: 'listing', label: '高價商品審核', icon: <FileText className="size-4" />, badge: priceReviewQueue.length },
           { id: 'tickets', label: '客服工單', icon: <Mail className="size-4" />, badge: tickets.filter((t) => t.status === 'pending' || t.status === 'processing').length },
           { id: 'announce', label: '公告管理', icon: <Megaphone className="size-4" /> },
+          { id: 'festival', label: '節慶預覽', icon: <Sparkles className="size-4" /> },
         ]}
       />
+
+      {tab === 'festival' && <FestivalAdminPreview />}
 
       {tab === 'board' && (
         <section className="space-y-5" aria-label="GMV 數據看板">
@@ -8093,58 +8377,7 @@ function AdminDashboard({
 
       {tab === 'fees' && (
         <section className="space-y-4" aria-label="店家月費追蹤">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            {(
-              [
-                ['active', '正常營運中'],
-                ['due', '待繳費'],
-                ['verifying', '核銷中'],
-                ['overdue', '逾期未繳費（已關店）'],
-              ] as const
-            ).map(([k, label]) => (
-              <div key={k} className={`${panelCls} p-4`}>
-                <p className="text-xs text-muted-foreground">{label}</p>
-                <p className="text-2xl font-black">{sellers.filter((s) => s.plan.status === k).length}</p>
-              </div>
-            ))}
-          </div>
-          <div className={`${panelCls} overflow-x-auto`}>
-            <table className="w-full min-w-[62rem] text-sm">
-              <thead className="bg-muted text-xs text-muted-foreground">
-                <tr>
-                  {['店名', '方案', '賣場狀態', '訂閱起止時間', '付款方式', '賣場開關（測試）', '操作'].map((h) => <th key={h} scope="col" className="px-4 py-2.5 text-left font-bold">{h}</th>)}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/60">
-                {sellers.map((s) => (
-                  <tr key={s.id} className="hover:bg-muted/40">
-                    <td className="px-4 py-3 font-bold">{s.name}</td>
-                    <td className="px-4 py-3">{money(PLAN_TOTAL)} / 月（含稅）</td>
-                    <td className="px-4 py-3">
-                      {s.suspended ? <Pill tone="bad"><Ban className="size-3" />已永久封鎖</Pill> : <Pill tone={planLabel[s.plan.status].tone}>{planLabel[s.plan.status].text}</Pill>}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3">
-                      <span className="text-xs text-muted-foreground">本期週期：</span>
-                      <span className="font-bold">{periodText(s.plan)}</span>
-                    </td>
-                    <td className="px-4 py-3">{s.plan.method === 'card' ? `信用卡${s.plan.autoPay ? '（自動扣款）' : ''}` : 'ATM 轉帳'}</td>
-                    <td className="px-4 py-3">
-                      {s.plan.billingLinked === false ? (
-                        <span className="text-xs text-muted-foreground">月費未串接，不能測試關店</span>
-                      ) : (
-                        <ShopStatusSwitch closed={isClosed(s)} onChange={(c) => onSetShopClosed(s.id, c)} />
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {(s.plan.status === 'due' || s.plan.status === 'overdue') && <button type="button" onClick={() => onRemind(s.id)} className={`${btnGhost} px-3 py-1.5 text-xs`}>發送催繳通知</button>}
-                      {s.plan.status === 'verifying' && <button type="button" onClick={() => onConfirmVerify(s.id)} className={`${btnPrimary} px-3 py-1.5 text-xs`}>確認核銷</button>}
-                      {s.plan.status === 'active' && <span className="text-xs text-muted-foreground">—</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AdminSellerExtensionPanel onNotify={() => undefined} />
         </section>
       )}
 
@@ -8654,74 +8887,168 @@ function RedeemSuccessModal({
 }
 
 function CheckinZone({
-  loggedIn,
+  phase,
   points,
-  ledger,
+  historyStamp,
   checkedDays,
   checkedToday,
+  nextReward,
   skew,
+  busy,
+  burstPoints,
+  errorText,
   scratchLeft,
+  scratchTotal,
+  scratchError,
   onCheckIn,
-  onNextDay,
   onOpenScratch,
   ownedPerks,
   equippedPerks,
   viewer,
+  perkBusy = false,
+  perkPurchaseOpen = null,
+  perkMallError = null,
+  perkMallServer = null,
   onUnlockPerk,
   onEquipPerk,
 }: {
-  loggedIn: boolean
+  phase: CheckinPhase
   points: number
-  ledger: LedgerEntry[]
+  historyStamp: string
   checkedDays: number
   checkedToday: boolean
+  nextReward: number | null
   skew: number
-  scratchLeft: number
+  busy: boolean
+  burstPoints: number | null
+  errorText: string | null
+  scratchLeft: number | null
+  scratchTotal: number | null
+  scratchError: string | null
   onCheckIn: () => void
-  onNextDay: () => void
   onOpenScratch: () => void
   ownedPerks: string[]
   equippedPerks: EquippedPerks
   viewer: PerkViewer
+  perkBusy?: boolean
+  perkPurchaseOpen?: boolean | null
+  perkMallError?: string | null
+  perkMallServer?: ReadonlyMap<string, MallPerkServer> | null
   onUnlockPerk: (id: string) => void
   onEquipPerk: (id: string) => void
 }) {
   const [showLedger, setShowLedger] = useState(false)
   const [previewId, setPreviewId] = useState<string | null>(null)
+  const [historyRows, setHistoryRows] = useState<PointHistoryItem[]>([])
+  const [historyNext, setHistoryNext] = useState<PointHistoryCursor | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const historyGen = useRef(0)
   const previewPerk = previewId ? perkById.get(previewId) : undefined
+  const loggedIn = phase === 'ready' || phase === 'loading' || phase === 'error'
+  const shownPoints = phase === 'ready' || phase === 'guest' ? points : null
+  const historyOpen = showLedger && (phase === 'ready' || phase === 'error')
+
+  useEffect(() => {
+    if (!historyOpen) return
+    const gen = historyGen.current + 1
+    historyGen.current = gen
+    setHistoryLoading(true)
+    setHistoryError(null)
+    void fetchMyPointHistory(null).then((result) => {
+      if (gen !== historyGen.current) return
+      setHistoryLoading(false)
+      if (!result.data) {
+        setHistoryRows([])
+        setHistoryNext(null)
+        setHistoryError(result.error ?? '點數紀錄暫時無法讀取')
+        return
+      }
+      setHistoryRows(result.data.rows)
+      setHistoryNext(result.data.next)
+    })
+  }, [historyOpen, historyStamp, points])
+
+  const loadOlderHistory = () => {
+    const cursor = historyNext
+    if (!cursor || historyLoading) return
+    const gen = historyGen.current
+    setHistoryLoading(true)
+    setHistoryError(null)
+    void fetchMyPointHistory(cursor).then((result) => {
+      if (gen !== historyGen.current) return
+      setHistoryLoading(false)
+      const page = result.data
+      if (!page) {
+        setHistoryError(result.error ?? '點數紀錄暫時無法讀取')
+        return
+      }
+      setHistoryRows((current) => {
+        const seen = new Set(current.map((row) => row.id))
+        return [...current, ...page.rows.filter((row) => !seen.has(row.id))]
+      })
+      setHistoryNext(page.next)
+    })
+  }
 
   return (
     <>
     <section className="mt-8 grid gap-4 lg:grid-cols-[22rem_1fr]" aria-label="天天簽到專區">
       <CheckinCard
-        loggedIn={loggedIn}
+        phase={phase}
         points={points}
         rewards={CHECKIN_REWARDS}
         checkedDays={checkedDays}
         checkedToday={checkedToday}
+        nextReward={nextReward}
         skew={skew}
+        busy={busy}
+        burstPoints={burstPoints}
+        errorText={errorText}
         onCheckIn={onCheckIn}
         footer={
           <div className="space-y-3">
             <button type="button" onClick={onOpenScratch} className={`${btnGhost} w-full`}>
               <Ticket className="size-4" />
-              幸運刮刮卡（今日剩餘 {loggedIn ? scratchLeft : 1} 次）
+              幸運刮刮卡（今日剩餘 {phase === 'guest' ? '1 / 1' : scratchError ? '無法讀取' : scratchLeft == null || scratchTotal == null ? '讀取中' : `${scratchLeft} / ${scratchTotal}`} 次）
             </button>
             <div className="flex items-center justify-between text-xs">
               <button type="button" onClick={() => setShowLedger((v) => !v)} aria-expanded={showLedger} className="font-bold text-brand-ink hover:underline">
-                {showLedger ? '收合點數明細' : '查看點數收支明細'}
+                {showLedger ? '收合點數紀錄' : '查看點數紀錄'}
               </button>
-              <span className="text-muted-foreground">簽到點數只留在這次瀏覽</span>
+              <span className="text-muted-foreground">完整流水</span>
             </div>
             {showLedger && (
-              <ul className="max-h-48 space-y-1.5 overflow-y-auto rounded-2xl bg-muted/50 p-3 text-xs" aria-label="點數收支明細">
-                {ledger.map((l) => (
-                  <li key={l.id} className="flex items-center justify-between gap-2">
-                    <span className="min-w-0"><span className="block truncate font-medium">{l.label}</span><span className="text-muted-foreground">{l.at}</span></span>
-                    <span className={`shrink-0 font-black ${l.delta > 0 ? 'text-emerald-400' : 'text-destructive'}`}>{l.delta > 0 ? `+${l.delta}` : l.delta}</span>
-                  </li>
-                ))}
-              </ul>
+              phase === 'guest' ? (
+                <p className="rounded-2xl bg-muted/50 p-3 text-xs text-muted-foreground">請先登入後查看自己的點數紀錄</p>
+              ) : phase === 'boot' || phase === 'loading' || (historyLoading && historyRows.length === 0) ? (
+                <p className="rounded-2xl bg-muted/50 p-3 text-xs text-muted-foreground">正在讀取點數紀錄</p>
+              ) : historyError && historyRows.length === 0 ? (
+                <p className="rounded-2xl bg-muted/50 p-3 text-xs text-muted-foreground">{historyError}</p>
+              ) : historyRows.length === 0 ? (
+                <p className="rounded-2xl bg-muted/50 p-3 text-xs text-muted-foreground">還沒有點數紀錄</p>
+              ) : (
+                <div className="space-y-2">
+                  {historyError && <p className="text-xs text-muted-foreground">{historyError}</p>}
+                  <ul className="max-h-48 space-y-1.5 overflow-y-auto rounded-2xl bg-muted/50 p-3 text-xs" aria-label="點數紀錄">
+                    {historyRows.map((row) => (
+                      <li key={row.id} className="flex items-center justify-between gap-2">
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium">{row.source}</span>
+                          <span className="text-muted-foreground">{row.date} · 交易後餘額 {row.balanceAfter}</span>
+                        </span>
+                        <span className={`shrink-0 font-black ${row.delta < 0 ? 'text-red-400' : 'text-emerald-400'}`}>{row.delta > 0 ? `+${row.delta}` : row.delta}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {historyNext && (
+                    <button type="button" onClick={loadOlderHistory} disabled={historyLoading} className="text-xs font-bold text-brand-ink hover:underline disabled:opacity-50">
+                      {historyLoading ? '正在讀取更早的紀錄' : '載入更早的紀錄'}
+                    </button>
+                  )}
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">這裡只顯示自己的點數流水，每次最多 20 筆，包含日期、來源、增減與交易後餘額。</p>
+                </div>
+              )
             )}
           </div>
         }
@@ -8730,10 +9057,14 @@ function CheckinZone({
       <div className={`${panelCls} p-5`}>
         <PerksPanel
           loggedIn={loggedIn}
-          points={points}
+          points={shownPoints}
           owned={ownedPerks}
           equipped={equippedPerks}
           viewer={viewer}
+          busy={perkBusy}
+          purchaseOpen={perkPurchaseOpen}
+          purchaseError={perkMallError}
+          server={perkMallServer}
           onPreview={setPreviewId}
           onUnlock={onUnlockPerk}
           onEquip={onEquipPerk}
@@ -8746,9 +9077,13 @@ function CheckinZone({
           perk={previewPerk}
           viewer={viewer}
           owned={ownedPerks.includes(previewPerk.id)}
-          equipped={equippedPerks[previewPerk.category] === previewPerk.id}
+          equipped={isPerkEquipped(equippedPerks, previewPerk)}
           loggedIn={loggedIn}
-          points={points}
+          points={shownPoints}
+          busy={perkBusy}
+          purchaseOpen={perkPurchaseOpen}
+          purchaseError={perkMallError}
+          server={perkMallServer}
           onUnlock={() => onUnlockPerk(previewPerk.id)}
           onEquip={() => onEquipPerk(previewPerk.id)}
         />
@@ -8924,21 +9259,33 @@ export default function OpenMarketplace() {
   const urlWriteRef = useRef(false)
 
   const [role, setRoleState] = useState<Role>('buyer')
-  const [page, setPageState] = useState<'market' | 'rewards'>(initialNav.page)
-  const [account, setAccount] = useState<{ name: string } | null>(null)
+  const [page, setPageState] = useState<'market' | 'rewards' | 'arcade'>(initialNav.page)
+  const [arcadeGame, setArcadeGameState] = useState<ArcadeGame>(initialNav.game)
+  const [streetVisit, setStreetVisit] = useState<string | null>(initialNav.visit)
+  const [hubTab, setHubTab] = useState<HubTab>('rewards')
+  const [mallFocusKey, setMallFocusKey] = useState(0)
+  const [account, setAccount] = useState<{ name: string; signupNickname?: string } | null>(null)
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [authResolved, setAuthResolved] = useState(false)
   const [sellerStatusReady, setSellerStatusReady] = useState(false)
   const [sellerApproved, setSellerApproved] = useState(false)
   const [ownedSellerId, setOwnedSellerId] = useState<string | null>(null)
-  
+  const sessionUserRef = useRef<string | null>(null)
+  const resetCheckinRef = useRef<() => void>(() => {})
+
 useEffect(() => {
+  let alive = true
   const syncUser = (user: { id: string; email?: string; user_metadata?: { name?: string } } | null) => {
+    if (!alive) return
     if (user) {
+      if (sessionUserRef.current !== user.id) resetCheckinRef.current()
+      sessionUserRef.current = user.id
       const name = user.user_metadata?.name || user.email?.split('@')[0] || '會員'
       setAuthUserId(user.id)
-      setAccount({ name })
+      setAccount({ name, signupNickname: user.user_metadata?.name?.trim() || undefined })
     } else {
+      if (sessionUserRef.current !== null) resetCheckinRef.current()
+      sessionUserRef.current = null
       setAuthUserId(null)
       setOwnedSellerId(null)
       setSellerApproved(false)
@@ -8951,15 +9298,32 @@ useEffect(() => {
     setAuthResolved(true)
   }
 
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-    syncUser(session?.user ?? null)
+  let ticket = 0
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event: string, session: { access_token?: string; user?: { id: string; email?: string; user_metadata?: { name?: string } } } | null) => {
+    const mine = ++ticket
+    if (session?.access_token && session.user) {
+      syncUser(session.user)
+      return
+    }
+    if (event === 'SIGNED_OUT') {
+      syncUser(null)
+      return
+    }
+    // 初始化尚未結束時先維持讀取中，不把空 session 當成未登入。
+    setTimeout(() => {
+      void supabase.auth.getSession().then(({ data }: { data: { session: { access_token?: string; user?: { id: string; email?: string; user_metadata?: { name?: string } } } | null } }) => {
+        if (!alive || mine !== ticket) return
+        const next = data.session
+        if (next?.access_token && next.user) syncUser(next.user)
+        else syncUser(null)
+      })
+    }, 0)
   })
 
-  supabase.auth.getUser().then(({ data }) => {
-    syncUser(data.user)
-  })
-
-  return () => subscription.unsubscribe()
+  return () => {
+    alive = false
+    subscription.unsubscribe()
+  }
 }, [])
   const [sellers, setSellers] = useState<Seller[]>([])
   const [adminSellerApplications, setAdminSellerApplications] = useState<Seller[]>([])
@@ -8975,13 +9339,14 @@ useEffect(() => {
   const [followPrefs, setFollowPrefs] = useState<Record<string, FollowPrefs>>({})
   const [buyerProfile, setBuyerProfile] = useState<{ tone: number; avatar?: string; nameChangedAt?: string; nicknameInitialized: boolean; canRename: boolean; nextRenameAt: string | null }>({ tone: 0, nicknameInitialized: false, canRename: true, nextRenameAt: null })
   const [publicNickname, setPublicNickname] = useState('')
+  const [profileOwnerId, setProfileOwnerId] = useState<string | null>(null)
   const [myReviews, setMyReviews] = useState<{ id: string; productName: string; rating: number; body: string; createdAt: string }[]>([])
   const [followCounts, setFollowCounts] = useState<Record<string, number>>({})
   const [activeStorefront, setActiveStorefront] = useState<StorefrontSettings | null>(null)
   const [similarProductId, setSimilarProductId] = useState<string | null>(null)
   const verifiedSoldRef = useRef<Record<string, number>>({})
   const [tickets, setTickets] = useState<SupportTicket[]>([])
-  const [welcomeOpen, setWelcomeOpen] = useState(true)
+  const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [termsOpen, setTermsOpen] = useState(false)
   const [forgotOpen, setForgotOpen] = useState(false)
   const [recoveryOpen, setRecoveryOpen] = useState(false)
@@ -9031,28 +9396,66 @@ useEffect(() => {
   const [notices, setNotices] = useState<SellerNotice[]>([])
   const [appeals, setAppeals] = useState<Appeal[]>([])
   const [coupons, setCoupons] = useState<Coupon[]>([])
-  const [points, setPoints] = useState(120)
+  const [points, setPoints] = useState(0)
   const [ledger, setLedger] = useState<LedgerEntry[]>([])
+  const [checkedToday, setCheckedToday] = useState(false)
+  const [checkedDays, setCheckedDays] = useState(0)
+  const [nextDelta, setNextDelta] = useState<number | null>(null)
+  const [checkinReady, setCheckinReady] = useState(false)
+  const [checkinError, setCheckinError] = useState<string | null>(null)
+  const [checkinBusy, setCheckinBusy] = useState(false)
+  const [burstPoints, setBurstPoints] = useState<number | null>(null)
+  const checkinGeneration = useRef(0)
+  const checkinReadyRef = useRef(false)
+  const authUserRef = useRef(authUserId)
+  authUserRef.current = authUserId
+  checkinReadyRef.current = checkinReady
+  const [scratchSnapshot, setScratchSnapshot] = useState<ScratchSnapshot | null>(null)
+  const [scratchCard, setScratchCard] = useState<ScratchCard | null>(null)
+  const [scratchError, setScratchError] = useState<string | null>(null)
+  const [scratchBusy, setScratchBusy] = useState(false)
+  const scratchGeneration = useRef(0)
+  const scratchReadyRef = useRef(false)
+  const announcedPlayId = useRef<string | null>(null)
+  const couponBusy = useRef(false)
+  const perkBusy = useRef(false)
   const [ownedPerks, setOwnedPerks] = useState<string[]>([])
   const [equippedPerks, setEquippedPerks] = useState<EquippedPerks>({})
-  const [clockSkew, setClockSkew] = useState(0)
+  const [perkBusyUi, setPerkBusyUi] = useState(false)
+  const [perkPurchaseOpen, setPerkPurchaseOpen] = useState<boolean | null>(null)
+  const [perkMallServer, setPerkMallServer] = useState<ReadonlyMap<string, MallPerkServer> | null>(null)
+  const [perkMallStamp, setPerkMallStamp] = useState(0)
+  const [perkMallError, setPerkMallError] = useState<string | null>(null)
+  resetCheckinRef.current = () => {
+    checkinGeneration.current += 1
+    checkinReadyRef.current = false
+    setPoints(0)
+    setLedger([])
+    setCheckedToday(false)
+    setCheckedDays(0)
+    setNextDelta(null)
+    setCheckinError(null)
+    setCheckinReady(false)
+    setCheckinBusy(false)
+    scratchGeneration.current += 1
+    scratchReadyRef.current = false
+    setScratchSnapshot(null)
+    setScratchCard(null)
+    setScratchError(null)
+    setScratchBusy(false)
+    announcedPlayId.current = null
+    setOwnedPerks([])
+    setEquippedPerks({})
+    perkBusy.current = false
+    setPerkBusyUi(false)
+  }
+  const [clockSkew] = useState(0)
   const dayIndex = useDayIndex(clockSkew)
-  const [checkin, setCheckin] = useState<{ streak: number; lastDay: number | null }>({ streak: 2, lastDay: null })
-  const checkedToday = dayIndex !== null && checkin.lastDay === dayIndex
-  const streakBroken =
-    !checkedToday &&
-    (checkin.streak >= CHECKIN_REWARDS.length || (dayIndex !== null && checkin.lastDay !== null && dayIndex - checkin.lastDay > 1))
-  const checkedDays = streakBroken ? 0 : checkin.streak
-  const freshScratchDay = { day: dayIndex, used: 0, shared: false, founderUsed: 0 }
-  const [scratchDay, setScratchDay] = useState(freshScratchDay)
-  const scratchToday = dayIndex !== null && scratchDay.day === dayIndex ? scratchDay : freshScratchDay
-  const scratchTotal = Math.min(SCRATCH_MAX_CHANCES, SCRATCH_BASE_CHANCES + (scratchToday.shared ? SCRATCH_SHARE_BONUS : 0))
-  const scratchLeft = Math.max(0, scratchTotal - scratchToday.used)
-  const founderLeft = Math.max(0, FOUNDER_DAILY_QUOTA - scratchToday.founderUsed)
+  const scratchTotal = !authUserId ? 1 : scratchSnapshot?.chancesTotal ?? null
+  const scratchLeft = !authUserId ? 1 : scratchSnapshot?.chancesLeft ?? null
+  const scratchShared = scratchSnapshot?.inviteBonusToday ?? false
   const [scratchOpen, setScratchOpen] = useState(false)
   const [scratchShareOpen, setScratchShareOpen] = useState(false)
-  const [scratchCard, setScratchCard] = useState<ScratchCard | null>(null)
-  const settledCardId = useRef<string | null>(null)
   const [wallet, setWallet] = useState<WalletEntry[]>([])
   const ownedCodes = useMemo(() => wallet.map((w) => w.code), [wallet])
   const usableCodes = useMemo(() => wallet.filter((w) => walletStatus(w) === 'unused').map((w) => w.code), [wallet])
@@ -9079,6 +9482,211 @@ useEffect(() => {
   }, [])
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
 
+  const applyCheckin = useCallback((data: CheckinSnapshot) => {
+    checkinReadyRef.current = true
+    setPoints(data.balance)
+    setLedger(data.entries)
+    setCheckedToday(data.checkedToday)
+    setCheckedDays(data.checkedDays)
+    setNextDelta(data.nextDelta)
+    setCheckinError(null)
+    setCheckinReady(true)
+  }, [])
+
+  const loadCheckin = useCallback(async (background: boolean) => {
+    const generation = checkinGeneration.current
+    const requestedUser = authUserId
+    if (!requestedUser) {
+      if (authUserRef.current) return
+      setPoints(0)
+      setLedger([])
+      setCheckedToday(false)
+      setCheckedDays(0)
+      setNextDelta(null)
+      setCheckinError(null)
+      setCheckinReady(true)
+      return
+    }
+    if (!background) {
+      checkinReadyRef.current = false
+      setCheckinReady(false)
+      setCheckinError(null)
+      setPoints(0)
+      setLedger([])
+      setCheckedToday(false)
+      setCheckedDays(0)
+      setNextDelta(null)
+    }
+    const result = await fetchMyCheckinState(requestedUser)
+    if (generation !== checkinGeneration.current || authUserRef.current !== requestedUser) return
+    if (!result.data) {
+      if (background && checkinReadyRef.current) return
+      setCheckinError(result.error)
+      setCheckinReady(false)
+      return
+    }
+    applyCheckin(result.data)
+  }, [authUserId, applyCheckin])
+
+  useEffect(() => {
+    if (!authResolved) return
+    void loadCheckin(false)
+  }, [authResolved, loadCheckin])
+
+  const seenCheckinDay = useRef<number | null>(null)
+  useEffect(() => {
+    if (!authResolved || !authUserId || dayIndex === null) return
+    if (seenCheckinDay.current === null) {
+      seenCheckinDay.current = dayIndex
+      return
+    }
+    if (seenCheckinDay.current === dayIndex) return
+    seenCheckinDay.current = dayIndex
+    void loadCheckin(true)
+  }, [dayIndex, authResolved, authUserId, loadCheckin])
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && authUserId) void loadCheckin(true)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [authUserId, loadCheckin])
+
+  const toScratchCard = useCallback((card: NonNullable<ScratchSnapshot['card']>): ScratchCard => {
+    if (card.outcomeKind === 'coupon' && card.coupon) {
+      const benefit = {
+        kind: card.coupon.kind,
+        amount: card.coupon.amount,
+        percent: card.coupon.percent,
+        maxDiscount: card.coupon.maxDiscount ?? undefined,
+        gift: card.coupon.gift,
+        minSpend: card.coupon.minSpend,
+      }
+      return {
+        id: card.id,
+        revealed: card.revealed,
+        outcome: {
+          kind: 'coupon',
+          couponId: card.coupon.couponId,
+          code: card.coupon.code,
+          sellerId: card.coupon.sellerId,
+          sellerName: card.coupon.sellerName,
+          headline: couponHeadline(benefit),
+          title: couponTitle(benefit),
+          minSpend: card.coupon.minSpend,
+          bonusPoints: 0,
+        },
+      }
+    }
+    const outcome: ScratchOutcome =
+      card.outcomeKind === 'none'
+        ? { kind: 'none', points: card.points }
+        : card.outcomeKind === 'coupon_fallback'
+          ? { kind: 'points', points: card.points, fallbackFrom: 'coupon' }
+          : card.outcomeKind === 'founder_fallback'
+            ? { kind: 'points', points: card.points, fallbackFrom: 'founder' }
+            : { kind: 'points', points: card.points }
+    return { id: card.id, outcome, revealed: card.revealed }
+  }, [])
+
+  const applyScratch = useCallback((data: ScratchSnapshot, announce: boolean) => {
+    setScratchSnapshot(data)
+    setScratchError(null)
+    setPoints(data.balance)
+    setScratchCard(data.card ? toScratchCard(data.card) : null)
+    if (announce && !data.replayed && data.card && announcedPlayId.current !== data.card.id) {
+      announcedPlayId.current = data.card.id
+      if (data.card.outcomeKind === 'coupon' && data.card.coupon) {
+        notify(`獲得「${data.card.coupon.sellerName}」優惠券，已放入券包。這次沒有改點數`)
+        void fetchMyCouponWallet(authUserRef.current).then((result) => {
+          if (authUserRef.current && result.data) setWallet(result.data.map(toWallet))
+        })
+      } else if (data.card.outcomeKind === 'coupon_fallback') {
+        notify(`目前沒有可發的優惠券，這次改入帳 ${data.card.points} 點`)
+      } else if (data.card.outcomeKind === 'founder_fallback') {
+        notify(`創始券尚未開放，這次改入帳 ${data.card.points} 點`)
+      } else if (data.card.outcomeKind === 'none') {
+        notify(`保底 ${data.card.points} 點已寫入正式點數帳本`)
+      } else {
+        notify(`獲得 ${data.card.points} 點，已寫入正式點數帳本`)
+      }
+    }
+  }, [notify, toScratchCard])
+
+  const loadScratch = useCallback(async (background: boolean) => {
+    const generation = scratchGeneration.current
+    const requestedUser = authUserId
+    if (!requestedUser) {
+      if (authUserRef.current) return
+      setScratchSnapshot(null)
+      setScratchCard(null)
+      setScratchError(null)
+      return
+    }
+    const result = await fetchMyScratchState(requestedUser)
+    if (generation !== scratchGeneration.current || authUserRef.current !== requestedUser) return
+    if (!result.data) {
+      if (background && scratchReadyRef.current) return
+      setScratchError(result.error)
+      return
+    }
+    scratchReadyRef.current = true
+    applyScratch(result.data, false)
+  }, [authUserId, applyScratch])
+
+  useEffect(() => {
+    if (!authResolved) return
+    void loadScratch(false)
+  }, [authResolved, loadScratch])
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && authUserId) void loadScratch(true)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [authUserId, loadScratch])
+
+  const seenScratchDay = useRef<number | null>(null)
+  useEffect(() => {
+    if (!authResolved || !authUserId || dayIndex === null) return
+    if (seenScratchDay.current === null) {
+      seenScratchDay.current = dayIndex
+      return
+    }
+    if (seenScratchDay.current === dayIndex) return
+    seenScratchDay.current = dayIndex
+    void loadScratch(true)
+  }, [dayIndex, authResolved, authUserId, loadScratch])
+
+  useEffect(() => {
+    if (!authResolved || !authUserId) return
+    let cancelled = false
+    void settleMySignupInvite(authUserId).then((result) => {
+      if (cancelled || authUserRef.current !== authUserId) return
+      if (result.data?.settled && result.data.bonusGranted && !result.data.replayed) {
+        notify('註冊邀請已成立，邀請人今天可多刮 1 次')
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [authResolved, authUserId, notify])
+
+  useEffect(() => {
+    if (burstPoints == null) return
+    const timer = setTimeout(() => setBurstPoints(null), 1800)
+    return () => clearTimeout(timer)
+  }, [burstPoints])
+
+  const checkinPhase: CheckinPhase =
+    !authResolved ? 'boot'
+    : !authUserId ? 'guest'
+    : checkinReady ? 'ready'
+    : checkinError ? 'error'
+    : 'loading'
+
   navRef.current = {
     ...navRef.current,
     product: productId,
@@ -9090,6 +9698,7 @@ useEffect(() => {
     sort,
     quick,
     page,
+    game: arcadeGame,
     view: role === 'seller' || (navRef.current.view === 'seller' && (!sellerStatusReady || sellerApproved)) ? (role === 'admin' ? 'buyer' : 'seller') : 'buyer',
     center: centerOpen,
     tab: role === 'seller' ? sellerTab : navRef.current.tab,
@@ -9121,9 +9730,30 @@ useEffect(() => {
     setStoreIdState(next)
     patchNav({ store: next }, 'push')
   }, [patchNav])
-  const setPage = useCallback((value: 'market' | 'rewards') => {
+  const setPage = useCallback((value: 'market' | 'rewards' | 'arcade') => {
     setPageState(value)
-    patchNav({ page: value }, 'push')
+    setArcadeGameState(null)
+    setStreetVisit(null)
+    patchNav({ page: value, game: null, visit: null }, 'push')
+  }, [patchNav])
+  const openArcadeGame = useCallback((game: Exclude<ArcadeGame, null>) => {
+    setPageState('arcade')
+    setArcadeGameState(game)
+    setStreetVisit(null)
+    patchNav({ page: 'arcade', game, visit: null }, 'push')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [patchNav])
+  const leaveStreetVisit = useCallback(() => {
+    setPageState('arcade')
+    setArcadeGameState('street')
+    setStreetVisit(null)
+    patchNav({ page: 'arcade', game: 'street', visit: null }, 'push')
+  }, [patchNav])
+  const openStreetVisit = useCallback((ownerId: string) => {
+    setPageState('arcade')
+    setArcadeGameState('street')
+    setStreetVisit(ownerId)
+    patchNav({ page: 'arcade', game: 'street', visit: ownerId }, 'push')
   }, [patchNav])
   const setCenterOpen = useCallback((value: boolean) => {
     setCenterOpenState(value)
@@ -9176,6 +9806,8 @@ useEffect(() => {
     setSortState(next.sort)
     setQuickState(next.quick)
     setPageState(next.page)
+    setArcadeGameState(next.game)
+    setStreetVisit(next.visit)
     setCenterOpenState(next.center)
     setSellerTabState(next.tab)
     setDraftPreview(null)
@@ -9195,28 +9827,65 @@ useEffect(() => {
   }, [authResolved, sellerStatusReady, sellerApproved, patchNav, searchParams])
 
   const [cartHydrated, setCartHydrated] = useState(false)
+  const [cartRemoteOk, setCartRemoteOk] = useState(false)
+  const cartEpoch = useRef(0)
+  const sellerResubmitLock = useRef(false)
+  const legacyWritable = useRef(false)
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem('hj-cart')
-      const parsed = raw ? JSON.parse(raw) as unknown : []
-      if (Array.isArray(parsed)) {
-        setCart(parsed.flatMap((item) => {
-          if (!item || typeof item !== 'object') return []
-          const line = item as CartLine
-          if (typeof line.key !== 'string' || typeof line.productId !== 'string' || typeof line.qty !== 'number' || line.qty < 1) return []
-          if (!line.variant || typeof line.variant !== 'object') return []
-          return [line]
-        }))
-      }
-    } catch {
-      /* ignore broken cart cache */
+    if (!authResolved) return
+    const epoch = cartEpoch.current + 1
+    cartEpoch.current = epoch
+    let cancelled = false
+    setCartHydrated(false)
+    const finish = (lines: CartLine[], remoteOk: boolean) => {
+      if (cancelled || cartEpoch.current !== epoch) return
+      legacyWritable.current = !remoteOk && !authUserId
+      setCart(lines)
+      setCartRemoteOk(remoteOk)
+      setCartHydrated(true)
     }
-    setCartHydrated(true)
-  }, [])
+    const load = async () => {
+      if (!authUserId) {
+        finish(parseLegacyCart(sessionStorage.getItem(LEGACY_CART_KEY)), false)
+        return
+      }
+      const remote = await listMyCart(authUserId)
+      if (cancelled || cartEpoch.current !== epoch) return
+      if (!remote.lines) {
+        finish(parseLegacyCart(sessionStorage.getItem(LEGACY_CART_KEY)), false)
+        notify(remote.error || '購物車暫時無法讀取，瀏覽器裡的舊購物車沒有被清空')
+        return
+      }
+      const raw = sessionStorage.getItem(LEGACY_CART_KEY)
+      const marker = sessionStorage.getItem(CART_MIGRATION_MARKER_KEY)
+      const token = migrationToken(authUserId, raw)
+      let lines = remote.lines
+      if (marker !== token) {
+        const pending = legacyLinesToImport(parseLegacyCart(raw), lines)
+        for (const line of pending) {
+          const added = await addCartItem(authUserId, line.productId, line.variant, line.qty)
+          if (cancelled || cartEpoch.current !== epoch) return
+          if (!added.lines) {
+            finish(lines, true)
+            notify(added.error || '舊購物車有一部分還沒轉入。原始資料仍留在這個瀏覽器，沒有清空。')
+            return
+          }
+          lines = added.lines
+        }
+        sessionStorage.setItem(CART_MIGRATION_MARKER_KEY, token)
+        if (pending.length > 0) notify('已把這個瀏覽器裡尚未入帳的購物車商品轉入，沒有重複加入，也沒有清空舊資料')
+      }
+      finish(lines, true)
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [authResolved, authUserId, notify])
   useEffect(() => {
-    if (!cartHydrated) return
-    sessionStorage.setItem('hj-cart', JSON.stringify(cart))
-  }, [cart, cartHydrated])
+    if (!cartHydrated || authUserId || !legacyWritable.current) return
+    sessionStorage.setItem(LEGACY_CART_KEY, legacyCartPayload(cart))
+  }, [cart, cartHydrated, authUserId])
 
   useEffect(() => {
     if (!authResolved || role === 'seller') return
@@ -9251,7 +9920,7 @@ useEffect(() => {
     return catalogSeller(sellerId || 'legacy')
   }, [sellerById, authUserId, ownedSellerId])
   const checkinSellerIds = useMemo(
-    () => new Set(coupons.filter((c) => c.listed && c.active && inWindow(c, todayStr())).map((c) => c.sellerId)),
+    () => new Set(coupons.filter((c) => c.listed && c.active && inWindow(c, todayStr()) && couponStatus(c, todayStr()) !== 'expired').map((c) => c.sellerId)),
     [coupons],
   )
   const mySeller = ownedSellerId ? sellerById.get(ownedSellerId) : undefined
@@ -9323,22 +9992,82 @@ useEffect(() => {
     }
   }, [authUserId, authResolved])
 
+  const replaceSellerCoupons = useCallback((sellerId: string, incoming: Coupon[]) => {
+    setCoupons((current) => [...incoming, ...current.filter((item) => item.sellerId !== sellerId)])
+  }, [])
+
+  useEffect(() => {
+    if (!authResolved) return
+    if (!authUserId) {
+      setWallet([])
+      return
+    }
+    let cancelled = false
+    void fetchMyCouponWallet(authUserId).then((result) => {
+      if (cancelled || authUserRef.current !== authUserId) return
+      if (result.data) setWallet(result.data.map(toWallet))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [authResolved, authUserId])
+
+  useEffect(() => {
+    if (!authResolved) return
+    if (!authUserId) {
+      setOwnedPerks([])
+      setEquippedPerks({})
+      setPerkPurchaseOpen(null)
+      setPerkMallServer(null)
+      setPerkMallError(null)
+      return
+    }
+    let cancelled = false
+    void fetchMyPerks(authUserId).then((result) => {
+      if (cancelled || authUserRef.current !== authUserId) return
+      if (!result.data) {
+        if (result.error && !result.error.includes('尚未完成資料庫更新')) notify(result.error)
+        return
+      }
+      setOwnedPerks(result.data.owned)
+      setEquippedPerks(result.data.equipped)
+    })
+    void fetchMyPointsMall(authUserId).then((result) => {
+      if (cancelled || authUserRef.current !== authUserId) return
+      setPerkPurchaseOpen(result.data ? result.data.perkPurchaseEnabled : null)
+      setPerkMallServer(result.data?.perks ? new Map(result.data.perks.map((row) => [row.id, row])) : null)
+      setPerkMallError(result.data ? null : result.error)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [authResolved, authUserId, notify, perkMallStamp])
+
+  useEffect(() => {
+    if (!authUserId || !sellerApproved) return
+    let cancelled = false
+    void fetchMySellerCoupons(authUserId).then((result) => {
+      if (cancelled || authUserRef.current !== authUserId) return
+      if (result.data) replaceSellerCoupons(authUserId, result.data.map(toCoupon))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [authUserId, sellerApproved, replaceSellerCoupons])
+
   const applyReviews = useCallback((rows: PublicReview[]) => {
     const grouped = new Map<string, Review[]>()
     rows.forEach((row) => {
-      const review: Review = {
-        id: row.id,
-        user: row.nickname,
-        rating: row.rating,
-        text: row.body,
-        date: row.createdAt.slice(0, 10),
-        reply: row.reply ? { text: row.reply, at: row.repliedAt ?? '' } : undefined,
-        photos: row.photos,
-      }
-      grouped.set(row.productId, [...(grouped.get(row.productId) ?? []), review])
+      grouped.set(row.productId, [...(grouped.get(row.productId) ?? []), toPublicReview(row)])
     })
     setProducts((current) => current.map((product) => ({ ...product, reviews: grouped.get(product.id) ?? [] })))
   }, [])
+
+  useEffect(() => {
+    setPublicNickname('')
+    setBuyerProfile({ tone: 0, nicknameInitialized: false, canRename: true, nextRenameAt: null })
+    setProfileOwnerId(null)
+  }, [authUserId])
 
   useEffect(() => {
     if (!authUserId) {
@@ -9375,6 +10104,7 @@ useEffect(() => {
           nextRenameAt: profile.profile.nextRenameAt,
         })
       }
+      setProfileOwnerId(authUserId)
       setFavorites(favoriteResult.ids)
       setFollowed(followResult.ids)
       setTickets(ticketResult.tickets.map(toSupportTicket))
@@ -9455,6 +10185,17 @@ useEffect(() => {
     }
   }, [openStoreUserId])
 
+  useEffect(() => {
+    if (!openStoreUserId || openStoreUserId === authUserId) return
+    let cancelled = false
+    void fetchStoreCoupons(openStoreUserId).then((result) => {
+      if (!cancelled && result.data) replaceSellerCoupons(openStoreUserId, result.data.map(toCoupon))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [openStoreUserId, authUserId, replaceSellerCoupons])
+
   const listedProducts = useMemo(
     () =>
       products.filter((p) => {
@@ -9496,7 +10237,10 @@ useEffect(() => {
   }
   const quickLabel = { freeShip: '較高單價', hot: '有成交紀錄', founder: '創始特約店', new: '新上架商品' } as const
 
-  const cartCount = cart.reduce((s, l) => s + l.qty, 0)
+  const summary = cartCounts(cart)
+  const cartCount = summary.items
+  const cartAria = `購物車，${summary.label}`
+  const historyStamp = useMemo(() => ledger.map((item) => item.id).join('|'), [ledger])
   const approvedCount = new Set(sellers.filter((s) => s.verify === 'approved' && !isOffline(s)).map((s) => s.userId || s.id)).size
   const newestProducts = useMemo(
     () => [...listedProducts].sort((a, b) => (b.listedAt || '').localeCompare(a.listedAt || '') || b.id.localeCompare(a.id)).slice(0, 8),
@@ -9569,10 +10313,20 @@ window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   /* 購物車 */
-  const addToCart = (pid: string, variant: Record<string, string>, qty: number): boolean => {
+  const rememberCart = (lines: RemoteCartLine[] | null, error: string | null) => {
+    if (!lines) {
+      notify(error || '購物車沒有更新')
+      return false
+    }
+    setCart(lines)
+    setCartRemoteOk(true)
+    setCartHydrated(true)
+    return true
+  }
+  const addToCart = async (pid: string, variant: Record<string, string>, qty: number): Promise<boolean> => {
     const product = products.find((p) => p.id === pid)
     if (!product) return false
-    const owner = sellerById.get(product.sellerId)
+    const owner = findSellerForMember(sellers, product.sellerId)
     if (product.flagged || priceReviewBlocksPublic(product) || (owner && isOffline(owner))) {
       notify(owner && isOffline(owner) ? '該店鋪正在進行系統維護或結帳升級中，暫時無法下單' : '此商品目前無法購買')
       return false
@@ -9582,24 +10336,85 @@ window.scrollTo({ top: 0, behavior: 'smooth' })
       notify(pickMessage(missingGroups.map((g) => g.name)))
       return false
     }
-    const key = `${pid}|${JSON.stringify(variant)}`
-    const existing = cart.find((l) => l.key === key)?.qty ?? 0
-    const inCartSameProduct = isCombo(product) ? 0 : cart.filter((l) => l.productId === pid && l.key !== key).reduce((s, l) => s + l.qty, 0)
-    const limit = stockFor(product, variant)
-    if (limit === 0) {
-      notify(`「${product.name}」此規格已缺貨`)
+    const identity = lineIdentity({ productId: pid, variant })
+    const existing = cart.find((l) => lineIdentity(l) === identity)?.qty ?? 0
+    const cap = maxLineOnHand(product, variant, cart.filter((l) => l.productId === pid && lineIdentity(l) !== identity))
+    if (cap == null) {
+      notify(`「${product.name}」的庫存資料無法確認，目前不能加入購物車。沒有把缺少的數量當成 0。`)
       return false
     }
-    if (existing + qty + inCartSameProduct > limit) {
-      notify(`庫存不足，「${product.name}」最多可購買 ${limit} 件`)
+    if (cap === 0) {
+      notify(`「${product.name}」此規格的欄位現貨為 0。這不是已扣除未到期保留後的最終可售數量。`)
       return false
     }
-    setCart((c) => (existing ? c.map((l) => (l.key === key ? { ...l, qty: l.qty + qty } : l)) : [...c, { key, productId: pid, variant, qty }]))
+    if (existing + qty > cap) {
+      const room = Math.max(0, cap - existing)
+      notify(`「${product.name}」欄位現貨不足。依共享庫存與規格庫存，這次最多還能再放 ${room} 件。未到期保留尚未扣除，不是最終可售數量。`)
+      return false
+    }
+    if (authUserId) {
+      if (!cartRemoteOk) {
+        notify('購物車還沒有接到資料庫，這次沒有加入，瀏覽器裡的舊購物車也沒有清空')
+        return false
+      }
+      const epoch = ++cartEpoch.current
+      const result = await addCartItem(authUserId, pid, variant, qty)
+      if (cartEpoch.current !== epoch) return false
+      return rememberCart(result.lines, result.error)
+    }
+    setCart((c) => (existing ? c.map((l) => (lineIdentity(l) === identity ? { ...l, qty: l.qty + qty } : l)) : [...c, { key: identity, productId: pid, variant, qty }]))
     return true
   }
-  const changeQty = (key: string, delta: number) =>
-    setCart((c) => c.flatMap((l) => (l.key === key ? (l.qty + delta <= 0 ? [] : [{ ...l, qty: l.qty + delta }]) : [l])))
-  const removeLine = (key: string) => setCart((c) => c.filter((l) => l.key !== key))
+  const changeQty = (key: string, delta: number) => {
+    const line = cart.find((item) => item.key === key)
+    if (!line) return
+    const next = line.qty + delta
+    if (authUserId) {
+      if (!cartRemoteOk || !line.cartItemId) {
+        notify(line.cartItemId ? '購物車還沒有接到資料庫，數量沒有變更' : '這筆商品還沒有購物車編號，數量沒有變更')
+        return
+      }
+      const product = products.find((item) => item.id === line.productId)
+      if (delta > 0 && product) {
+        const cap = maxLineOnHand(product, line.variant, cart.filter((item) => item.productId === line.productId && item.key !== line.key))
+        if (cap == null || next > cap) return
+      }
+      const epoch = ++cartEpoch.current
+      const request = next <= 0 ? removeCartItem(authUserId, line.cartItemId) : setCartItemQty(authUserId, line.cartItemId, next)
+      void request.then((result) => {
+        if (cartEpoch.current !== epoch) return
+        rememberCart(result.lines, result.error)
+      })
+      return
+    }
+    setCart((current) => current.flatMap((item) => {
+      if (item.key !== key) return [item]
+      if (next <= 0) return []
+      if (delta > 0) {
+        const product = products.find((entry) => entry.id === item.productId)
+        if (!product) return [item]
+        const cap = maxLineOnHand(product, item.variant, current.filter((entry) => entry.productId === item.productId && entry.key !== item.key))
+        if (cap == null || next > cap) return [item]
+      }
+      return [{ ...item, qty: next }]
+    }))
+  }
+  const removeLine = (key: string) => {
+    const line = cart.find((item) => item.key === key)
+    if (authUserId) {
+      if (!cartRemoteOk || !line?.cartItemId) {
+        notify('這筆商品沒有從資料庫移除')
+        return
+      }
+      const epoch = ++cartEpoch.current
+      void removeCartItem(authUserId, line.cartItemId).then((result) => {
+        if (cartEpoch.current !== epoch) return
+        rememberCart(result.lines, result.error)
+      })
+      return
+    }
+    setCart((c) => c.filter((l) => l.key !== key))
+  }
 
   const toggleFav = async (id: string) => {
     if (!account || !authUserId) {
@@ -9700,9 +10515,23 @@ window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   useEffect(() => {
-    if (welcomeOpen || !account || (role !== 'buyer' && role !== 'seller')) return
-    if (!toursSeen.includes(role)) setTourRole(role)
-  }, [welcomeOpen, account, role, toursSeen])
+    if (!authResolved) return
+    const owner = guideOwner(authUserId)
+    setWelcomeOpen(!welcomeDismissed(owner))
+    setToursSeen(toursSeenFor(owner))
+    setTourRole(null)
+  }, [authResolved, authUserId])
+
+  useEffect(() => {
+    if (!authResolved || !account || (role !== 'buyer' && role !== 'seller')) return
+    const owner = guideOwner(authUserId)
+    if (!welcomeDismissed(owner)) {
+      setTourRole(null)
+      return
+    }
+    const seen = toursSeenFor(owner)
+    setTourRole(seen.includes(role) ? null : role)
+  }, [authResolved, authUserId, account, role, welcomeOpen])
 
   const prefsOf = (sid: string): SmsPrefs => smsPrefs[sid] ?? { onOrder: true, onPaid: true }
   const sendSms = (sellerId: string, kind: 'order' | 'paid' | 'report', text: string): boolean => {
@@ -9718,128 +10547,17 @@ window.scrollTo({ top: 0, behavior: 'smooth' })
     void p
     notify('金流尚未啟用，不會建立訂單，也不會標記為已付款。')
     return []
-    const groups = new Map<string, CartLine[]>()
-    cart.forEach((l) => {
-      const prod = products.find((x) => x.id === l.productId)
-      if (!prod) return
-      if (p.sellerIds && !p.sellerIds.includes(prod.sellerId)) return
-      groups.set(prod.sellerId, [...(groups.get(prod.sellerId) ?? []), l])
-    })
-    const stamp = `${todayStr().replace(/-/g, '')}${String(Date.now()).slice(-4)}`
-    const created: Order[] = []
-    let n = 1
-    let smsSent = 0
-    let usedCouponId: string | null = null
-    const usedMeta = { viaWallet: true }
-    let usedOrderId = ''
-    const orderedKeys = new Set<string>()
-    groups.forEach((lines, sid) => {
-      const owner = sellerById.get(sid)
-      if (!owner || isOffline(owner)) return
-      const items: OrderItem[] = lines.map((l) => {
-        const prod = products.find((x) => x.id === l.productId) as Product
-        return { productId: prod.id, name: prod.name, variant: Object.values(l.variant).join(' / '), qty: l.qty, price: unitPrice(prod, l.variant) }
-      })
-      const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0)
-      const shipping = shipFee(p.ship, subtotal)
-      const cp = p.coupon ? coupons.find((x) => x.id === p.coupon?.id) : undefined
-      const viaWallet = !!cp && usableCodes.includes(cp.code)
-      const couponOk =
-        !!cp &&
-        cp.sellerId === sid &&
-        (cp.active || viaWallet) &&
-        inWindow(cp, todayStr()) &&
-        subtotal >= cp.minSpend &&
-        (viaWallet || (!(cp.listed || cp.exclusive) && couponRemain(cp) > 0))
-      const discount = couponOk && cp ? couponDiscount(cp, subtotal, shipping) : 0
-      const giftNote = couponOk && cp && kindOf(cp) === 'gift' ? cp.gift : undefined
-      if (couponOk && cp) {
-        usedMeta.viaWallet = viaWallet
-        usedCouponId = cp.id
-        usedOrderId = `OD${stamp}${n}`
-      }
-      lines.forEach((l) => orderedKeys.add(l.key))
-      const order: Order = {
-        id: `OD${stamp}${n++}`,
-        sellerId: sid,
-        owner: account?.name ?? p.buyer,
-        buyer: p.buyer,
-        items,
-        subtotal,
-        shipping,
-        discount: discount || undefined,
-        couponCode: (discount || giftNote) && cp ? cp.code : undefined,
-        giftNote,
-        total: subtotal + shipping - discount,
-        pay: p.pay,
-        payStatus: p.pay === 'card' ? '已付款' : '待匯款',
-        status: '待出貨',
-        date: todayStr(),
-        shipMethod: p.ship,
-        shipTo: p.shipTo,
-        live: true,
-      }
-      created.push(order)
-      const payNote = p.pay === 'card' ? '信用卡已付款' : '待 ATM 匯款'
-      if (sendSms(sid, 'order', `【買個 Pay 服】新訂單 ${order.id}，買家 ${maskName(p.buyer)}，金額 ${money(order.total)}（${payNote}），請盡快處理。`)) smsSent++
-    })
-    setOrders((o) => [...created, ...o])
-    setProducts((prev) =>
-      prev.map((pr) => {
-        const qty = cart.filter((l) => orderedKeys.has(l.key) && l.productId === pr.id).reduce((s, l) => s + l.qty, 0)
-        if (!qty) return pr
-        const comboStock = pr.comboStock ? { ...pr.comboStock } : undefined
-        if (comboStock) {
-          cart
-            .filter((l) => orderedKeys.has(l.key) && l.productId === pr.id)
-            .forEach((l) => {
-              const k = comboKey(pr, l.variant)
-              if (comboStock[k] !== undefined) comboStock[k] = Math.max(0, comboStock[k] - l.qty)
-            })
-        }
-        const optionStock = pr.optionStock ? { ...pr.optionStock } : undefined
-        if (optionStock) {
-          cart
-            .filter((l) => orderedKeys.has(l.key) && l.productId === pr.id)
-            .forEach((l) =>
-              Object.entries(l.variant).forEach(([g, o]) => {
-                const k = optKey(g, o)
-                if (optionStock[k] !== undefined) optionStock[k] = Math.max(0, optionStock[k] - l.qty)
-              }),
-            )
-        }
-        return { ...pr, stock: Math.max(0, pr.stock - qty), optionStock, comboStock }
-      }),
-    )
-    if (usedCouponId) {
-      const usedId = usedCouponId
-      setCoupons((l) => l.map((c) => (c.id === usedId ? { ...c, usedOrders: c.usedOrders + 1 } : c)))
-      const orderRef = usedOrderId
-      const usedAt = new Date().toISOString().slice(0, 10)
-      setWallet((w) => {
-        let marked = false
-        return w.map((e) => {
-          if (!marked && e.couponId === usedId && walletStatus(e) === 'unused') {
-            marked = true
-            return { ...e, usedAt, orderId: orderRef }
-          }
-          return e
-        })
-      })
-    }
-    setCart((c) => c.filter((l) => !orderedKeys.has(l.key)))
-    notify(`已成立 ${created.length} 筆訂單${smsSent ? `，並已簡訊通知 ${smsSent} 位賣家` : ''}`)
-    return created
   }
 
   /* 認證 / 註冊 */
  
 const registerBuyer = async (name: string, email: string, password: string) => {
+  const inviteCode = readSignupInvite()
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
-      data: { name },
+      data: inviteCode ? { name, invite_code: inviteCode } : { name },
     },
   })
 
@@ -9852,18 +10570,19 @@ const registerBuyer = async (name: string, email: string, password: string) => {
     notify('註冊失敗，請稍後再試')
     return
   }
+  clearSignupInvite()
 
   
-if (!data.session) {
+if (!data.session?.access_token || !data.user) {
   setAuthOpen(false)
   notify('註冊成功！請先到 Email 收取驗證信，完成驗證後再登入。')
   return
 }
 
 setAuthOpen(false)
-
-
-  setAccount({ name })
+  sessionUserRef.current = data.user.id
+  setAuthUserId(data.user.id)
+  setAccount({ name, signupNickname: name.trim() || undefined })
   setRole('buyer')
   notify(`歡迎加入買個 Pay 服，${name}！`)
 }
@@ -9873,18 +10592,19 @@ const login = async (email: string, password: string) => {
     password,
   })
 
-  if (error || !data.user) {
+  if (error || !data.session?.access_token || !data.user) {
     notify('登入失敗，請確認 Email、密碼及信箱驗證狀態')
     return
   }
 
   const name = data.user.user_metadata?.name || email.split('@')[0]
 
+  sessionUserRef.current = data.user.id
   setAuthUserId(data.user.id)
-  setAccount({ name })
+  setAccount({ name, signupNickname: data.user.user_metadata?.name?.trim() || undefined })
   setRole('buyer')
   setAuthOpen(false)
-  notify(`歡迎回來，${name}`)
+  notify('歡迎回來')
 }
 const registerSeller = async (d: SellerRegisterData) => {
     if (!account) {
@@ -10355,15 +11075,7 @@ notify('實名申請已送出，請等待平台審核通過後再開通賣家功
       const fresh = rows.filter((row) => row.productId === product.id)
       return {
         ...product,
-        reviews: fresh.map((row) => ({
-          id: row.id,
-          user: row.nickname,
-          rating: row.rating,
-          text: row.body,
-          date: row.createdAt.slice(0, 10),
-          reply: row.reply ? { text: row.reply, at: row.repliedAt ?? '' } : undefined,
-          photos: row.photos,
-        })),
+        reviews: fresh.map((row) => toPublicReview(row)),
       }
     }))
     if (blocked) return blocked
@@ -10396,7 +11108,7 @@ notify('實名申請已送出，請等待平台審核通過後再開通賣家功
   const payRenewal = (method: PayMethod, info: { last4?: string; invoice?: InvoiceOpt }) => {
     const s = mySeller
     if (!s || s.plan.billingLinked !== true) {
-      notify('月費功能建置中，尚未串接綠界，不會建立付款紀錄')
+      notify('付款尚未開放，不會建立付款紀錄')
       return
     }
     const wasClosed = isClosed(s)
@@ -10483,352 +11195,296 @@ notify('實名申請已送出，請等待平台審核通過後再開通賣家功
     setAuthOpen(true)
     return false
   }
-  const doCheckIn = () => {
-    if (!requireAccount('請先登入買家帳號才能簽到')) return
-    if (checkedToday) {
-      notify('今天已經簽到過了，明天再來')
+  const doCheckIn = async () => {
+    if (!authResolved) return
+    if (!authUserId) {
+      requireAccount('請先登入買家帳號才能簽到')
       return
     }
-    if (dayIndex === null) return
-    const reward = CHECKIN_REWARDS[checkedDays]
-    setPoints((p) => p + reward)
-    setLedger((l) => [{ id: `L${Date.now()}`, delta: reward, label: `每日簽到（第 ${checkedDays + 1} 天）`, at: todayStr() }, ...l])
-    setCheckin({ streak: checkedDays + 1, lastDay: dayIndex })
-    notify(checkedDays + 1 === CHECKIN_REWARDS.length ? `簽到成功，連續 7 天加碼獲得 ${reward} 點` : `簽到成功，獲得 ${reward} 點`)
-  }
-  const nextCheckinDay = () => {
-    setClockSkew((s) => s + msUntilReset(Date.now() + s))
-    notify('已模擬進入隔天（00:00 重製），可再次簽到與刮卡')
+    if (checkinPhase === 'error' || checkinPhase === 'loading' || checkinPhase === 'boot') {
+      void loadCheckin(false)
+      return
+    }
+    if (checkedToday) {
+      notify('今天已經簽到過了，不會重複入帳')
+      return
+    }
+    if (checkinBusy || !authUserId) return
+    const requestedUser = authUserId
+    setCheckinBusy(true)
+    checkinGeneration.current += 1
+    const result = await claimMyDailyCheckin(requestedUser)
+    checkinGeneration.current += 1
+    setCheckinBusy(false)
+    if (authUserRef.current !== requestedUser) return
+    if (!result.data || (result.data.replayed !== true && result.data.awardedDelta == null)) {
+      notify(result.error ?? '簽到沒有成功，點數沒有變動')
+      return
+    }
+    applyCheckin(result.data)
+    if (result.data.replayed) {
+      notify('今天已經簽到過了，不會重複入帳')
+      return
+    }
+    const awarded = result.data.awardedDelta ?? 0
+    setBurstPoints(awarded)
+    notify(result.data.checkedDays === CHECKIN_REWARDS.length ? `簽到成功，連續 7 天加碼獲得 ${awarded} 點` : `簽到成功，獲得 ${awarded} 點`)
   }
 
   /* 每日幸運刮刮卡 */
-  const updateScratchToday = (fn: (s: typeof freshScratchDay) => typeof freshScratchDay) =>
-    setScratchDay((prev) => fn(dayIndex !== null && prev.day === dayIndex ? prev : { day: dayIndex, used: 0, shared: false, founderUsed: 0 }))
-
   const openScratch = () => setScratchOpen(true)
 
-  const startScratch = () => {
-    if (!account) {
+  const startScratch = async () => {
+    if (!account || !authUserId) {
       setScratchOpen(false)
       requireAccount('請先登入買家帳號才能刮刮卡')
       return
     }
-    if (dayIndex === null || (scratchCard && !scratchCard.revealed)) return
-    if (scratchLeft <= 0) {
-      notify('今日免費次數已用完，明天 00:00 再來')
+    if (scratchBusy || (scratchCard && !scratchCard.revealed)) return
+    if (scratchLeft === 0) {
+      notify('今日刮卡次數已用完，台灣時間 00:00 後再來')
       return
     }
-    const pickCoupon = (founder: boolean) => {
-      const pool = coupons.filter((c) => {
-        const owner = sellerById.get(c.sellerId)
-        return (
-          c.active &&
-          !!c.founderPrize === founder &&
-          (founder || c.listed) &&
-          inWindow(c, todayStr()) &&
-          couponRemain(c) > 0 &&
-          !ownedCodes.includes(c.code) &&
-          !!owner &&
-          owner.verify === 'approved' &&
-          !isOffline(owner) &&
-          (!founder || isFounder(owner))
-        )
-      })
-      return pool.length ? pool[Math.floor(Math.random() * pool.length)] : undefined
-    }
-    const kind = rollPrizeKind()
-    let outcome: ScratchOutcome
-    if (kind === 'coupon' || kind === 'founder') {
-      const coupon = kind === 'founder' && founderLeft <= 0 ? undefined : pickCoupon(kind === 'founder')
-      outcome = coupon
-        ? {
-            kind,
-            couponId: coupon.id,
-            code: coupon.code,
-            sellerId: coupon.sellerId,
-            sellerName: sellerById.get(coupon.sellerId)?.name ?? '',
-            headline: couponHeadline(coupon),
-            title: couponTitle(coupon),
-            minSpend: coupon.minSpend,
-            bonusPoints: kind === 'founder' ? FOUNDER_BONUS_POINTS : COUPON_BONUS_POINTS,
-          }
-        : { kind: 'points', points: kind === 'founder' ? FOUNDER_FALLBACK_POINTS : COUPON_FALLBACK_POINTS, fallbackFrom: kind }
-    } else if (kind === 'points') {
-      outcome = { kind: 'points', points: rollPointAmount() }
-    } else {
-      outcome = { kind: 'none', points: NONE_GUARANTEE_POINTS }
-    }
-    updateScratchToday((s) => ({ ...s, used: s.used + 1, founderUsed: s.founderUsed + (outcome.kind === 'founder' ? 1 : 0) }))
-    setScratchCard({ id: `sc${Date.now()}`, outcome, revealed: false })
-  }
-
-  const grantScratchPoints = (n: number, label: string) => {
-    setPoints((p) => p + n)
-    setLedger((l) => [{ id: `L${Date.now()}${Math.random().toString(36).slice(2, 6)}`, delta: n, label, at: todayStr() }, ...l])
-  }
-
-  const revealScratch = () => {
-    const card = scratchCard
-    if (!card || card.revealed || settledCardId.current === card.id) return
-    settledCardId.current = card.id
-    const o = card.outcome
-    const wonCoupon = o.kind === 'coupon' || o.kind === 'founder' ? coupons.find((x) => x.id === o.couponId) : undefined
-    const walletId = wonCoupon ? `w${Date.now()}${Math.random().toString(36).slice(2, 6)}` : undefined
-    setScratchCard({ ...card, revealed: true, walletId })
-
-    if (o.kind === 'points') {
-      grantScratchPoints(o.points, o.fallbackFrom ? '幸運刮刮卡（優惠券已發完，改發紅利點數）' : '幸運刮刮卡・紅利點數')
-      notify(`恭喜獲得 ${o.points} 點紅利點數`)
-    } else if (o.kind === 'none') {
-      grantScratchPoints(o.points, '幸運刮刮卡・保底點數')
-      notify(`再接再厲，保底獲得 ${o.points} 點平台通用點數`)
-    } else if (wonCoupon && walletId) {
-      const today = todayStr()
-      setCoupons((l) => l.map((x) => (x.id === wonCoupon.id ? { ...x, redeemed: x.redeemed + 1 } : x)))
-      setWallet((w) => [
-        { id: walletId, couponId: wonCoupon.id, code: wonCoupon.code, sellerId: wonCoupon.sellerId, kind: wonCoupon.kind, amount: wonCoupon.amount, percent: wonCoupon.percent, maxDiscount: wonCoupon.maxDiscount, gift: wonCoupon.gift, minSpend: wonCoupon.minSpend, claimedAt: today, expiresAt: walletExpiry(wonCoupon, today) },
-        ...w,
-      ])
-      if (o.kind === 'coupon' || o.kind === 'founder') {
-        grantScratchPoints(o.bonusPoints, `幸運刮刮卡・折價券保底點數（${o.sellerName}）`)
-        notify(`恭喜獲得「${o.sellerName}」折價券與 ${o.bonusPoints} 點保底紅利`)
-      }
-    }
-  }
-
-  const recycleScratch = () => {
-    const card = scratchCard
-    if (!card || !card.revealed || card.recycled || !card.walletId) return
-    const o = card.outcome
-    if (o.kind !== 'coupon' && o.kind !== 'founder') return
-    if (!wallet.some((w) => w.id === card.walletId)) {
-      notify('這張折價券已不在券包中，無法分解')
+    const requestedUser = authUserId
+    setScratchBusy(true)
+    const result = await drawMyScratchCard(requestedUser)
+    setScratchBusy(false)
+    if (authUserRef.current !== requestedUser) return
+    if (!result.data) {
+      setScratchError(result.error)
+      notify(result.error ?? '刮卡沒有成功，點數沒有增加')
       return
     }
-    setWallet((w) => w.filter((x) => x.id !== card.walletId))
-    setCoupons((l) => l.map((x) => (x.id === o.couponId ? { ...x, redeemed: Math.max(0, x.redeemed - 1) } : x)))
-    grantScratchPoints(RECYCLE_POINTS, `幸運刮刮卡・折價券分解（${o.sellerName}）`)
-    setScratchCard({ ...card, recycled: true })
-    notify(`已分解折價券，獲得 ${RECYCLE_POINTS} 點平台通用點數`)
+    checkinGeneration.current += 1
+    applyScratch(result.data, false)
+    void loadCheckin(true)
   }
 
-  const goScratchStore = (sellerId: string) => {
-    closeScratch()
-    setStoreId(sellerId)
+  const revealScratch = async () => {
+    if (!authUserId || !scratchCard || scratchCard.revealed || scratchBusy) return
+    const requestedUser = authUserId
+    setScratchBusy(true)
+    const result = await revealMyScratchCard(requestedUser)
+    setScratchBusy(false)
+    if (authUserRef.current !== requestedUser) return
+    if (!result.data) {
+      notify(result.error ?? '揭曉狀態沒有保存。請再試一次；已經入帳的點數不會再發一次')
+      return
+    }
+    applyScratch(result.data, true)
   }
 
   const closeScratch = () => {
-    if (scratchCard && !scratchCard.revealed) revealScratch()
+    if (scratchCard && !scratchCard.revealed) void revealScratch()
     setScratchOpen(false)
-    setScratchCard(null)
   }
 
-  const shareForScratch = async () => {
+  const shareForScratch = () => {
     if (!account) {
       setScratchOpen(false)
-      requireAccount('請先登入買家帳號才能領取分享加碼')
-      return
-    }
-    if (scratchToday.shared) {
-      notify('今天已領取過分享加碼')
+      requireAccount('請先登入買家帳號才能邀請朋友')
       return
     }
     setScratchShareOpen(true)
   }
-
-  const completeScratchShare = () => {
-    setScratchShareOpen(false)
-    if (scratchToday.shared) return
-    updateScratchToday((s) => ({ ...s, shared: true }))
-    notify('分享成功，今日多 1 次刮卡機會')
-  }
-
-  const goScratchCoupons = () => {
-    closeScratch()
-    openCenter()
-    notify('刮到的優惠券已在「買家中心」的優惠券包')
-  }
-  const finishRedeem = (c: Coupon) => {
-    const owner = sellerById.get(c.sellerId)?.name ?? ''
-    setPoints((p) => p - c.cost)
-    setLedger((l) => [{ id: `L${Date.now()}`, delta: -c.cost, label: `兌換「${owner}」折價券 ${c.code}`, at: todayStr() }, ...l])
-    setCoupons((l) => l.map((x) => (x.id === c.id ? { ...x, redeemed: x.redeemed + 1 } : x)))
-    const today = new Date().toISOString().slice(0, 10)
-    setWallet((w) => [
-      { id: `w${Date.now()}`, couponId: c.id, code: c.code, sellerId: c.sellerId, kind: c.kind, amount: c.amount, percent: c.percent, maxDiscount: c.maxDiscount, gift: c.gift, minSpend: c.minSpend, claimedAt: today, expiresAt: walletExpiry(c, today) },
-      ...w,
-    ])
-    setOtpFor(null)
-    setRedeemedCoupon(c)
+  const applyClaim = (sellerId: string, result: { replayed: boolean; balance: number; hold: WalletCouponRecord }, pointsChanged: boolean) => {
+    setWallet((current) => [toWallet(result.hold), ...current.filter((item) => item.id !== result.hold.id && item.couponId !== result.hold.couponId)])
+    if (pointsChanged) {
+      checkinGeneration.current += 1
+      setPoints(result.balance)
+      void loadCheckin(true)
+    }
+    void fetchStoreCoupons(sellerId).then((fresh) => {
+      if (fresh.data) replaceSellerCoupons(sellerId, fresh.data.map(toCoupon))
+    })
+    if (sellerId === authUserId) {
+      void fetchMySellerCoupons(authUserId).then((fresh) => {
+        if (fresh.data) replaceSellerCoupons(authUserId, fresh.data.map(toCoupon))
+      })
+    }
   }
   const redeemCoupon = (id: string) => {
     if (!requireAccount('請先登入買家帳號才能兌換優惠券')) return
-    const c = coupons.find((x) => x.id === id)
-    if (!c) return
-    if (couponRemain(c) <= 0) {
-      notify('此優惠券已被兌換完畢')
-      return
+    if (couponBusy.current) return
+    const coupon = coupons.find((item) => item.id === id)
+    couponBusy.current = true
+    void exchangeMyCoupon(id, authUserId).then((result) => {
+      couponBusy.current = false
+      if (!result.data) {
+        notify(result.error ?? '優惠券兌換沒有完成，點數與庫存都沒有變更')
+        return
+      }
+      if (coupon) applyClaim(coupon.sellerId, result.data, true)
+      else applyClaim(result.data.hold.sellerId, result.data, true)
+      notify(result.data.replayed ? '您已兌換過此優惠券，沒有再次扣點' : '已用 100 點兌換，優惠券已放入券包')
+    })
+  }
+  const redeemPointOffer = async (id: string, cost: number) => {
+    if (!requireAccount('請先登入買家帳號才能兌換優惠券')) return
+    if (couponBusy.current) return
+    couponBusy.current = true
+    try {
+      const result = await exchangeMyPointOffer(id, cost, authUserId)
+      if (!result.data) {
+        notify(result.error ?? '點數兌換沒有完成，點數與庫存沒有變更')
+        return
+      }
+      applyClaim(result.data.hold.sellerId, result.data, true)
+      notify(result.data.replayed ? '您已兌換過此優惠券，沒有再次扣點' : `已用 ${result.data.cost} 點兌換，優惠券已放入券包`)
+    } finally {
+      couponBusy.current = false
     }
-    if (ownedCodes.includes(c.code)) {
-      notify('您已兌換過此優惠券')
-      return
-    }
-    if (points < c.cost) {
-      notify(`點數不足，還差 ${c.cost - points} 點`)
-      return
-    }
-    finishRedeem(c)
+  }
+  const mallOpen = !storeId && !draftPreview && page === 'arcade' && arcadeGame === null && hubTab === 'mall'
+  const openPointsMall = () => {
+    if (storeId || draftPreview) setStoreId(null)
+    setPage('arcade')
+    setHubTab('mall')
+    setMallFocusKey((key) => key + 1)
+  }
+  const applyPerkSnapshot = (data: PerkSnapshot) => {
+    setOwnedPerks(data.owned)
+    setEquippedPerks(data.equipped)
+    checkinGeneration.current += 1
+    setPoints(data.balance)
+    void loadCheckin(true)
   }
   const unlockPerk = (id: string) => {
     if (!requireAccount('請先登入買家帳號才能解鎖特權')) return
-    const p = perkById.get(id)
-    if (!p) return
-    if (ownedPerks.includes(id)) {
-      notify('您已經擁有這件收藏品')
-      return
-    }
-    if (points < p.cost) {
-      notify(`點數不足，還差 ${p.cost - points} 點`)
-      return
-    }
-    setPoints((v) => v - p.cost)
-    setLedger((l) => [{ id: `L${Date.now()}`, delta: -p.cost, label: `解鎖特權「${p.name}」`, at: todayStr() }, ...l])
-    setOwnedPerks((l) => [...l, id])
-    setEquippedPerks((e) => ({ ...e, [p.category]: id }))
-    notify(`已解鎖並裝備「${p.name}」`)
+    if (perkBusy.current || ownedPerks.includes(id)) return
+    const perk = perkById.get(id)
+    if (!perk) return
+    perkBusy.current = true
+    setPerkBusyUi(true)
+    void purchaseMyPerk(id, authUserId).then((result) => {
+      perkBusy.current = false
+      setPerkBusyUi(false)
+      if (!result.data) {
+        if (result.error === '虛擬特權購買尚未開放') setPerkPurchaseOpen(false)
+        notify(result.error ?? '虛擬特權購買沒有完成，點數與收藏都沒有變更')
+        setPerkMallStamp((n) => n + 1)
+        return
+      }
+      const cost = perkMallServer?.get(id)?.cost ?? perk.cost
+      applyPerkSnapshot(result.data)
+      setPerkMallStamp((n) => n + 1)
+      notify(result.data.replayed ? `已擁有「${perk.label}」，沒有再次扣點` : `已用 ${cost} 點兌換「${perk.label}」`)
+    })
   }
   const equipPerk = (id: string) => {
-    const p = perkById.get(id)
-    if (!p || !ownedPerks.includes(id)) return
-    const on = equippedPerks[p.category] === id
-    setEquippedPerks((e) => ({ ...e, [p.category]: on ? undefined : id }))
-    notify(on ? `已卸下「${p.label}」` : `已裝備「${p.label}」`)
+    if (!requireAccount('請先登入買家帳號才能裝備特權')) return
+    const perk = perkById.get(id)
+    if (!perk || !ownedPerks.includes(id) || perkBusy.current) return
+    const on = isPerkEquipped(equippedPerks, perk)
+    perkBusy.current = true
+    setPerkBusyUi(true)
+    void setMyPerkEquipped(id, !on, authUserId).then((result) => {
+      perkBusy.current = false
+      setPerkBusyUi(false)
+      if (!result.data) {
+        notify(result.error ?? '裝備沒有變更')
+        return
+      }
+      applyPerkSnapshot(result.data)
+      notify(on ? `已卸下「${perk.label}」` : `已裝備「${perk.label}」`)
+    })
   }
   const claimShelfCoupon = (id: string) => {
     if (!requireAccount('請先登入買家帳號才能領取優惠券')) return
-    const c = coupons.find((x) => x.id === id)
-    const today = todayStr()
-    if (!c || !c.shelf || !c.active || c.deleted || !inWindow(c, today)) {
-      notify('此優惠券目前無法領取')
-      return
-    }
-    if (couponRemain(c) <= 0) {
-      notify('此優惠券已被領完')
-      return
-    }
-    if (ownedCodes.includes(c.code)) {
-      notify('您已領取過此優惠券')
-      return
-    }
-    setCoupons((l) => l.map((x) => (x.id === id ? { ...x, redeemed: x.redeemed + 1 } : x)))
-    setWallet((w) => [
-      { id: `w${Date.now()}`, couponId: c.id, code: c.code, sellerId: c.sellerId, kind: c.kind, amount: c.amount, percent: c.percent, maxDiscount: c.maxDiscount, gift: c.gift, minSpend: c.minSpend, claimedAt: today, expiresAt: walletExpiry(c, today) },
-      ...w,
-    ])
-    notify('已領取優惠券，可在優惠券包查看')
+    if (couponBusy.current) return
+    const coupon = coupons.find((item) => item.id === id)
+    couponBusy.current = true
+    void claimStorefrontCoupon(id, authUserId).then((result) => {
+      couponBusy.current = false
+      if (!result.data) {
+        notify(result.error ?? '此優惠券目前無法領取')
+        return
+      }
+      if (coupon) applyClaim(coupon.sellerId, result.data, false)
+      else applyClaim(result.data.hold.sellerId, result.data, false)
+      notify(result.data.replayed ? '您已領取過此優惠券' : '已領取優惠券，可在優惠券包查看')
+    })
   }
   const verifyPhoneAndRedeem = () => {
-    const c = coupons.find((x) => x.id === otpFor)
     setPhoneVerified(true)
-    if (c) finishRedeem(c)
+    setOtpFor(null)
+    notify('手機驗證不會兌換優惠券，也不會扣除點數')
   }
-  const listedSlots = (sid: string) =>
-    coupons.filter((c) => c.sellerId === sid && c.listed && c.active && couponStatus(c, todayStr()) !== 'expired').length
-  const createCoupon = (d: CouponDraft): string | null => {
-    const code = d.code.toUpperCase()
-    if (coupons.some((c) => c.code === code)) return '此折扣碼已被使用，請換一組'
-    if (d.listed && listedSlots(mySellerId) >= MAX_LISTED_COUPONS) return `每家店最多同時上架 ${MAX_LISTED_COUPONS} 張到簽到專區`
-    setCoupons((l) => [
-      {
-        id: `c${Date.now()}`,
-        sellerId: mySellerId,
-        name: d.name,
-        code,
-        kind: d.kind,
-        amount: d.kind === 'cash' ? d.amount : 0,
-        percent: d.kind === 'percent' ? d.percent : undefined,
-        maxDiscount: d.kind === 'percent' && d.maxDiscount > 0 ? d.maxDiscount : undefined,
-        gift: d.kind === 'gift' ? d.gift.trim() : undefined,
-        minSpend: d.minSpend,
-        qty: d.qty,
-        redeemed: 0,
-        usedOrders: 0,
-        listed: d.listed,
-        shelf: d.shelf,
-        cost: DEFAULT_REDEEM_COST,
-        active: true,
-        startAt: d.startAt,
-        endAt: d.endAt,
-      },
-      ...l,
-    ])
+  const rememberCoupon = (row: SellerCouponRecord) => {
+    setCoupons((current) => [toCoupon(row), ...current.filter((item) => item.id !== row.id)])
+  }
+  const createCoupon = async (draft: CouponDraft): Promise<string | null> => {
+    if (!authUserId || !sellerApproved) return '尚未通過賣家審核'
+    const result = await saveMySellerCoupon(null, draft, authUserId)
+    if (!result.data) return result.error ?? '優惠券沒有建立'
+    rememberCoupon(result.data)
     notify(
-      d.listed && d.shelf
-        ? '優惠券已建立，已放上賣場供買家領取，並開放簽到專區與刮刮卡'
-        : d.listed
-          ? '優惠券已建立，並同步開放簽到專區與幸運刮刮卡'
-          : d.shelf
+      draft.listed && draft.shelf
+        ? '優惠券已建立。賣場可免費領取；遊戲曝光不收費，也不保證被刮中'
+        : draft.listed
+          ? '優惠券已建立，並開放遊戲曝光。平台不收曝光費'
+          : draft.shelf
             ? '優惠券已建立，買家可在您的賣場直接領取'
-            : '優惠券已建立（僅限店內折扣碼）',
+            : '優惠券已建立。尚未放到賣場，也未參加遊戲曝光',
     )
     return null
   }
   const toggleCouponListed = (id: string) => {
-    const c = coupons.find((x) => x.id === id)
-    if (!c) return
-    if (!c.listed && listedSlots(c.sellerId) >= MAX_LISTED_COUPONS) {
-      notify(`每家店最多同時上架 ${MAX_LISTED_COUPONS} 張到簽到專區`)
-      return
-    }
-    setCoupons((l) => l.map((x) => (x.id === id ? { ...x, listed: !x.listed } : x)))
-    notify(c.listed ? '已關閉簽到專區與刮刮卡曝光' : '已開放簽到專區與刮刮卡曝光')
+    const coupon = coupons.find((item) => item.id === id)
+    if (!coupon || coupon.sellerId !== authUserId) return
+    void setMySellerCouponFlag(id, 'game_pool', !coupon.listed, authUserId).then((result) => {
+      if (!result.data) {
+        notify(result.error ?? '遊戲曝光沒有變更')
+        return
+      }
+      rememberCoupon(result.data)
+      notify(result.data.listed ? '已開放遊戲曝光。平台不收曝光費，也不保證曝光次數' : '已關閉遊戲曝光，之後不會再發出新券')
+    })
   }
   const toggleCouponShelf = (id: string) => {
-    const c = coupons.find((x) => x.id === id)
-    if (!c) return
-    setCoupons((l) => l.map((x) => (x.id === id ? { ...x, shelf: !x.shelf } : x)))
-    notify(c.shelf ? '已從賣場收回，買家無法再領取' : '已放上賣場，買家可直接領取')
+    const coupon = coupons.find((item) => item.id === id)
+    if (!coupon || coupon.sellerId !== authUserId) return
+    void setMySellerCouponFlag(id, 'shelf', !coupon.shelf, authUserId).then((result) => {
+      if (!result.data) {
+        notify(result.error ?? '賣場領取沒有變更')
+        return
+      }
+      rememberCoupon(result.data)
+      notify(result.data.shelf ? '已放上賣場，買家可直接領取，不扣點也不佔曝光名額' : '已從賣場收回，買家無法再領取')
+    })
   }
-  const updateCoupon = (id: string, d: CouponDraft): string | null => {
-    const c = coupons.find((x) => x.id === id)
-    if (!c || c.sellerId !== mySellerId) return '找不到此折價券'
-    if (d.qty < c.redeemed) return `發行數量不可低於已領取數量（${c.redeemed} 張）`
-    if (d.listed && !c.listed && listedSlots(c.sellerId) >= MAX_LISTED_COUPONS) return `每家店最多同時上架 ${MAX_LISTED_COUPONS} 張到簽到專區`
-    const locked = c.redeemed > 0 || c.usedOrders > 0
-    setCoupons((l) =>
-      l.map((x) => {
-        if (x.id !== id) return x
-        const base = { ...x, name: d.name, qty: d.qty, endAt: d.endAt, listed: d.listed, shelf: d.shelf, startAt: (x.startAt ?? '') <= todayStr() && x.startAt ? x.startAt : d.startAt }
-        if (locked) return base
-        return {
-          ...base,
-          kind: d.kind,
-          amount: d.kind === 'cash' ? d.amount : 0,
-          percent: d.kind === 'percent' ? d.percent : undefined,
-          maxDiscount: d.kind === 'percent' && d.maxDiscount > 0 ? d.maxDiscount : undefined,
-          gift: d.kind === 'gift' ? d.gift.trim() : undefined,
-          minSpend: d.minSpend,
-        }
-      }),
-    )
-    notify('折價券已更新')
+  const updateCoupon = async (id: string, draft: CouponDraft): Promise<string | null> => {
+    const coupon = coupons.find((item) => item.id === id)
+    if (!coupon || coupon.sellerId !== authUserId) return '找不到此折價券'
+    const result = await saveMySellerCoupon(id, draft, authUserId)
+    if (!result.data) return result.error ?? '折價券沒有更新'
+    rememberCoupon(result.data)
+    notify('折價券已更新。已領取的券仍使用領取當下的條件與到期日')
     return null
   }
   const toggleCouponActive = (id: string) => {
-    const c = coupons.find((x) => x.id === id)
-    if (!c) return
-    if (!c.active && c.listed && listedSlots(c.sellerId) >= MAX_LISTED_COUPONS) {
-      notify(`每家店最多同時上架 ${MAX_LISTED_COUPONS} 張到簽到專區，請先停止其他券的曝光`)
-      return
-    }
-    setCoupons((l) => l.map((x) => (x.id === id ? { ...x, active: !x.active } : x)))
-    notify(c.active ? '已下架：賣場與刮刮卡獎池已隱藏，已領取的買家仍可使用' : '已重新上架')
+    const coupon = coupons.find((item) => item.id === id)
+    if (!coupon || coupon.sellerId !== authUserId) return
+    void setMySellerCouponFlag(id, 'active', !coupon.active, authUserId).then((result) => {
+      if (!result.data) {
+        notify(result.error ?? '上下架沒有變更')
+        return
+      }
+      rememberCoupon(result.data)
+      notify(result.data.active ? '已重新上架' : '已下架：賣場與遊戲曝光已停止發新券，已領取的買家仍可看到原券')
+    })
   }
   const deleteCoupon = (id: string) => {
-    const c = coupons.find((x) => x.id === id)
-    if (!c) return
-    setCoupons((l) => l.map((x) => (x.id === id ? { ...x, deleted: true, active: false, listed: false, shelf: false } : x)))
-    notify(c.redeemed > 0 ? '優惠券紀錄已刪除，已領取的買家仍可使用' : '優惠券紀錄已刪除')
+    const coupon = coupons.find((item) => item.id === id)
+    if (!coupon || coupon.sellerId !== authUserId) return
+    void deleteMySellerCoupon(id, authUserId).then((result) => {
+      if (result.error) {
+        notify(result.error)
+        return
+      }
+      setCoupons((current) => current.filter((item) => item.id !== id))
+      notify(coupon.redeemed > 0 ? '優惠券已停止發放，已領取的買家仍保留原券' : '優惠券紀錄已刪除')
+    })
   }
   const moveSellerToFollow = async (sid: string) => {
     const sellerUserId = sellers.find((item) => item.id === sid)?.userId
@@ -10908,9 +11564,38 @@ notify('實名申請已送出，請等待平台審核通過後再開通賣家功
     setOrders((l) => l.map((x) => (x.id === id && x.refund ? { ...x, refund: { ...x.refund, status: accept ? 'accepted' : 'rejected' } } : x)))
     notify(accept ? '已同意買家申請，請與買家確認退款方式' : '已拒絕買家申請')
   }
-  const resubmit = () => {
-    setSellers((l) => l.map((s) => (s.id === mySellerId ? { ...s, verify: 'pending', rejectReason: undefined } : s)))
-    notify('已重新送審')
+  const resubmit = async () => {
+    if (sellerResubmitLock.current) return
+    const patch = ownRejectedResubmit(authUserId, mySeller ? { id: mySeller.id, userId: mySeller.userId, verify: mySeller.verify } : undefined)
+    if (!patch) {
+      notify('只有被退回的本人申請可以重新送審')
+      return
+    }
+    sellerResubmitLock.current = true
+    try {
+      const { data, error } = await supabase
+        .from('seller_applications')
+        .update({ status: patch.status })
+        .eq('id', patch.id)
+        .eq('user_id', patch.userId)
+        .eq('status', 'rejected')
+        .select('id, status, user_id')
+        .maybeSingle()
+      if (error) {
+        console.error('賣家重新送審失敗：', error)
+        const blocked = error.code === '42501' || /permission|policy|row-level|rls/i.test(error.message)
+        notify(blocked ? '重新送審沒有寫入。資料庫目前不允許會員把自己的退回申請改回待審，需要站長先核准權限。' : `重新送審失敗：${error.message}`)
+        return
+      }
+      if (!data || data.status !== 'pending' || data.user_id !== patch.userId) {
+        notify('重新送審沒有寫入，申請仍是原本狀態')
+        return
+      }
+      setSellers((list) => list.map((seller) => (seller.id === patch.id ? { ...seller, verify: 'pending', rejectReason: undefined } : seller)))
+      notify('已重新送審，請等待平台審核。重新整理後仍以資料庫狀態為準。')
+    } finally {
+      sellerResubmitLock.current = false
+    }
   }
 
   /* 管理員動作 */
@@ -11037,7 +11722,13 @@ notify('實名申請已送出，請等待平台審核通過後再開通賣家功
   const reportsLeft = account
     ? Math.max(0, REPORT_LIMIT - reports.filter((r) => r.reporterAccount === account.name && Date.now() - (r.ts ?? 0) < REPORT_WINDOW_MS).length)
     : 0
-  const viewer: Viewer | null = account ? { name: account.name, tone: buyerProfile.tone, avatar: buyerProfile.avatar, equipped: equippedPerks } : null
+  // 公開名稱只取 profiles.public_nickname；未設定時才退回註冊時填的暱稱，不顯示 Email、實名或負責人姓名。
+  const memberName = !account
+    ? ''
+    : profileOwnerId !== authUserId
+      ? ''
+      : publicNickname.trim() || account.signupNickname || '會員'
+  const viewer: Viewer | null = account ? { name: memberName, tone: buyerProfile.tone, avatar: buyerProfile.avatar, equipped: equippedPerks } : null
   const needLoginForReport = () => {
     notify('請先登入會員後再檢舉（不需實名認證）')
     setAuthOpen(true)
@@ -11249,27 +11940,6 @@ notify('實名申請已送出，請等待平台審核通過後再開通賣家功
     notify(approve ? (a.kind === 'ban' ? '申訴成立，已解除封鎖並通知賣家' : '申訴成立，商品已恢復上架並通知賣家') : '已駁回申訴並通知賣家')
   }
 
-  const roleToggle = (cls: string) => (
-    <div className={`h-10 items-center gap-1 rounded-full border border-border/70 bg-muted/60 p-1 md:h-9 ${cls}`} role="group" aria-label="快速切換角色（測試用）">
-      {(
-        [
-          ['buyer', '買家'],
-          ['seller', '賣家'],
-        ] as const
-      ).map(([id, label]) => (
-        <button
-          key={id}
-          type="button"
-          aria-pressed={role === id}
-          onClick={() => switchRole(id)}
-          className={`h-full flex-1 rounded-full px-3 text-xs font-bold transition ${role === id ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  )
-
   const searchField = (
     <>
       <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -11329,14 +11999,14 @@ notify('實名申請已送出，請等待平台審核通過後再開通賣家功
   }
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-background text-foreground">
+    <div className="fa-page-root relative min-h-screen overflow-x-hidden bg-background text-foreground">
       <div
         aria-hidden
         className="pointer-events-none fixed inset-0 [background-image:radial-gradient(rgba(255,255,255,0.045)_1px,transparent_1px)] [background-size:22px_22px]"
       />
       <div
         aria-hidden
-        className="pointer-events-none fixed inset-x-0 top-0 h-[420px] bg-gradient-to-b from-orange-500/[0.07] to-transparent"
+        className="fa-brand-glow pointer-events-none fixed inset-x-0 top-0 h-[420px] bg-gradient-to-b from-orange-500/[0.07] to-transparent"
       />
 
       <header className="sticky top-0 z-30 border-b border-border/70 bg-card/90 backdrop-blur-md">
@@ -11360,24 +12030,34 @@ notify('實名申請已送出，請等待平台審核通過後再開通賣家功
               </button>
             )}
             {role === 'buyer' && !sellerApproved && (
-              <button type="button" onClick={() => switchRole('seller')} className={`${btnGhost} hidden py-2 md:inline-flex`}>
+              <button type="button" onClick={() => switchRole('seller')} className={`${btnGhost} py-2`}>
                 <Store className="size-4" />
                 我要開店
               </button>
             )}
 
-            {roleToggle('hidden md:flex')}
+            {role === 'seller' && (
+              <button
+                type="button"
+                onClick={() => { if (storeId || draftPreview) setStoreId(null); switchRole('buyer'); openCenter() }}
+                className={`${btnGhost} py-2`}
+                aria-label="回到買家中心"
+              >
+                <ClipboardList className="size-4" />
+                買家中心
+              </button>
+            )}
 
             {account ? (
               <div className="flex items-center gap-1 rounded-full border border-border/70 bg-card py-0.5 pl-0.5 pr-1 text-xs font-bold md:gap-1.5 md:py-1 md:pl-1 md:pr-2">
                 <PerkAvatar
-                  viewer={{ name: account.name, tone: buyerProfile.tone, avatar: buyerProfile.avatar }}
+                  viewer={{ name: memberName, tone: buyerProfile.tone, avatar: buyerProfile.avatar }}
                   equipped={equippedPerks}
                   size="size-8 md:size-7"
                   textSize="text-xs"
                   thickness={2}
                 />
-                <span className="hidden max-w-24 truncate sm:inline">{account.name}</span>
+                {memberName && <span className="hidden max-w-24 truncate sm:inline">{memberName}</span>}
                 <button type="button" aria-label="登出" 
 onClick={async () => {
   const { error } = await supabase.auth.signOut()
@@ -11387,6 +12067,9 @@ onClick={async () => {
     return
   }
 
+  sessionUserRef.current = null
+  resetCheckinRef.current()
+  setAuthUserId(null)
   setAccount(null)
   setAdminAuthed(false)
   setSellerAccess(false)
@@ -11413,24 +12096,34 @@ onClick={async () => {
               <div className="hidden items-center gap-2 md:flex">
                 <button
                   type="button"
-                  onClick={() => { setPage(page === 'rewards' ? 'market' : 'rewards'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-                  aria-pressed={page === 'rewards'}
-                  className={`${page === 'rewards' ? btnPrimary : btnGhost} py-2`}
+                  onClick={() => { setPage('arcade'); setHubTab('rewards'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+                  aria-pressed={page === 'arcade' && !mallOpen}
+                  className={`${page === 'arcade' && !mallOpen ? btnPrimary : btnGhost} py-2`}
+                >
+                  <Gamepad2 className="size-4" />
+                  Pay 服遊樂園
+                </button>
+                <button
+                  type="button"
+                  onClick={openPointsMall}
+                  aria-pressed={mallOpen}
+                  aria-label={checkinPhase === 'ready' ? `點數商城，目前 ${points} 點` : '點數商城'}
+                  className={`${mallOpen ? btnPrimary : btnGhost} py-2`}
                 >
                   <Coins className="size-4" />
-                  簽到兌換
-                  <span className="text-xs font-black">{account ? points : 0}</span>
+                  點數商城
+                  <span className="text-xs font-black">{checkinPhase === 'ready' ? points : checkinPhase === 'guest' ? 0 : '…'}</span>
                 </button>
 
-                <button type="button" onClick={openCenter} className={`${btnGhost} relative py-2`} aria-label={`買家中心，${centerBadge} 則未讀訂單通知`}>
+                <button type="button" onClick={openCenter} className={`${btnGhost} relative py-2`} aria-label={orderUnread.failed ? '買家中心，未讀訂單通知無法讀取' : centerBadge == null ? '買家中心' : `買家中心，${centerBadge} 則未讀訂單通知`}>
                   <ClipboardList className="size-4" />
                   買家中心
-                  {centerBadge > 0 && (
+                  {centerBadge != null && centerBadge > 0 && (
                     <span className="absolute -right-1.5 -top-1.5 flex min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[11px] font-black leading-5 text-white">{centerBadge}</span>
                   )}
                 </button>
 
-                <button type="button" onClick={() => setCartOpen(true)} className={`${btnPrimary} relative py-2`} aria-label={`購物車，${cartCount} 件商品`}>
+                <button type="button" onClick={() => setCartOpen(true)} className={`${btnPrimary} relative py-2`} aria-label={cartAria} title={cartAria}>
                   <ShoppingCart className="size-4" />
                   購物車
                   {cartCount > 0 && (
@@ -11441,10 +12134,11 @@ onClick={async () => {
             )}
           </div>
 
-          <div className="order-last flex w-full items-center gap-2 md:hidden">
-            {roleToggle(role === 'buyer' ? 'flex shrink-0' : 'flex w-full')}
-            {role === 'buyer' && <div className="relative min-w-0 flex-1">{searchField}</div>}
-          </div>
+          {role === 'buyer' && (
+            <div className="order-last flex w-full items-center gap-2 md:hidden">
+              <div className="relative min-w-0 flex-1">{searchField}</div>
+            </div>
+          )}
         </div>
       </header>
       {role === 'buyer' && page === 'market' && !storeOpen && <AnnouncementMarquee items={announcements} />}
@@ -11453,7 +12147,7 @@ onClick={async () => {
       {storeOpen && storeSeller && (
         <StorePage
           seller={storeSeller}
-          checkin={checkinSellerIds.has(storeSeller.id)}
+          checkin={checkinSellerIds.has(storeSeller.userId || storeSeller.id)}
           closed={isOffline(storeSeller)}
           suspended={!!storeSeller.suspended}
           products={products.filter((p) => {
@@ -11519,10 +12213,10 @@ onClick={async () => {
           reportsLeft={reportsLeft}
           onNeedLogin={needLoginForReport}
   onReport={(reason, note, evidence) => reportSeller(storeSeller.id, reason, note, evidence)}
-        redeemCoupons={coupons.filter((c) => c.sellerId === storeSeller.id && c.listed && c.active && inWindow(c, todayStr()))}
-        shelfCoupons={coupons.filter((c) => c.sellerId === storeSeller.id && c.shelf && c.active && !c.deleted && inWindow(c, todayStr()))}
+        redeemCoupons={coupons.filter((c) => c.sellerId === (storeSeller.userId || storeSeller.id) && c.listed && c.active && !c.deleted && couponRemain(c) > 0 && inWindow(c, todayStr()))}
+        shelfCoupons={coupons.filter((c) => c.sellerId === (storeSeller.userId || storeSeller.id) && c.shelf && c.active && !c.deleted && couponRemain(c) > 0 && inWindow(c, todayStr()))}
         onClaim={claimShelfCoupon}
-  points={points}
+  points={checkinPhase === 'ready' ? points : null}
   ownedCodes={ownedCodes}
   onRedeem={redeemCoupon}
   />
@@ -11540,25 +12234,64 @@ onClick={async () => {
             <button type="button" onClick={() => setProductId(null)} className="rounded-full bg-card px-4 py-2 text-xs">返回商品列表</button>
           </div>
         )}
+        {!storeOpen && role === 'buyer' && page === 'arcade' && navRef.current.view !== 'seller' && (
+          <ArcadePage
+            game={arcadeGame}
+            tab={hubTab}
+            onTabChange={setHubTab}
+            mallFocusKey={mallFocusKey}
+            authResolved={authResolved}
+            authUserId={authUserId}
+            member={{
+              viewer: { name: memberName, tone: buyerProfile.tone, avatar: buyerProfile.avatar },
+              points: checkinPhase === 'ready' ? points : null,
+              ownedPerks,
+              equippedPerks,
+              perkBusy: perkBusyUi,
+              scratchLeft,
+              scratchTotal,
+              onUnlockPerk: unlockPerk,
+              onEquipPerk: equipPerk,
+              onRedeemCoupon: redeemPointOffer,
+            }}
+            onBack={() => { setPage('market'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            onOpenHub={() => { setPage('arcade'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            onOpenGame={openArcadeGame}
+            onOpenScratch={openScratch}
+            onNeedLogin={() => setAuthOpen(true)}
+            visitOwnerId={streetVisit}
+            onLeaveVisit={leaveStreetVisit}
+            onVisitStreet={openStreetVisit}
+          />
+        )}
         {!storeOpen && role === 'buyer' && page === 'rewards' && navRef.current.view !== 'seller' && (
           <div className="mt-6">
             <button type="button" onClick={() => { setPage('market'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} className={`${btnGhost} py-1.5`}>
               <ArrowLeft className="size-4" />返回市集
             </button>
             <CheckinZone
-              loggedIn={!!account}
+              phase={checkinPhase}
               points={points}
-              ledger={ledger}
+              historyStamp={historyStamp}
               checkedDays={checkedDays}
               checkedToday={checkedToday}
+              nextReward={nextDelta}
               skew={clockSkew}
+              busy={checkinBusy}
+              burstPoints={burstPoints}
+              errorText={checkinError}
               scratchLeft={scratchLeft}
+              scratchTotal={scratchTotal}
+              scratchError={scratchError}
               onCheckIn={doCheckIn}
-              onNextDay={nextCheckinDay}
               onOpenScratch={openScratch}
               ownedPerks={ownedPerks}
               equippedPerks={equippedPerks}
-              viewer={{ name: account?.name ?? '買家', tone: buyerProfile.tone, avatar: buyerProfile.avatar }}
+              viewer={{ name: memberName, tone: buyerProfile.tone, avatar: buyerProfile.avatar }}
+              perkBusy={perkBusyUi}
+              perkPurchaseOpen={perkPurchaseOpen}
+              perkMallError={perkMallError}
+              perkMallServer={perkMallServer}
               onUnlockPerk={unlockPerk}
               onEquipPerk={equipPerk}
             />
@@ -11567,11 +12300,12 @@ onClick={async () => {
 
         {!storeOpen && role === 'buyer' && page === 'market' && !(navRef.current.view === 'seller' && (!authResolved || !sellerStatusReady)) && (
           <>
+            <FestivalBanner compact />
             <HeroCarousel
               approvedCount={approvedCount}
               productCount={listedProducts.length}
               freeShipText={money(FREE_SHIP)}
-              planPriceText={`${money(PLAN_PRICE)} + 5% 營業稅`}
+              planPriceText="未稅 NT$400、稅額 NT$20、含稅實付 NT$420"
               onStartSelling={() => switchRole('seller')}
               onQuick={onQuick}
               photos={heroPhotos}
@@ -11581,14 +12315,19 @@ onClick={async () => {
 
             {!query.trim() && (
               <DailyRewards
-                loggedIn={!!account}
+                phase={checkinPhase}
                 points={points}
                 rewards={CHECKIN_REWARDS}
                 checkedDays={checkedDays}
                 checkedToday={checkedToday}
+                nextReward={nextDelta}
                 skew={clockSkew}
+                busy={checkinBusy}
+                burstPoints={burstPoints}
+                errorText={checkinError}
                 scratchLeft={scratchLeft}
                 scratchTotal={scratchTotal}
+                scratchError={scratchError}
                 onCheckIn={doCheckIn}
                 onOpenScratch={openScratch}
                 onSeeRewards={() => onQuick('checkin')}
@@ -11685,7 +12424,24 @@ onClick={async () => {
           </>
         )}
 
-        {!storeOpen && role === 'seller' && !sellerApproved && (
+        {!storeOpen && role === 'seller' && !sellerApproved && !sellerStatusReady && (
+          <div className={`${panelCls} mt-6 p-8 text-center text-sm text-muted-foreground`}>
+            正在讀取賣家申請狀態。
+          </div>
+        )}
+        {!storeOpen && role === 'seller' && sellerStatusReady && !sellerApproved && mySeller?.verify === 'rejected' && (
+          <div className={`${panelCls} mt-6 space-y-3 p-6 text-sm`}>
+            <p className="font-bold text-red-400">實名審核被退回：{mySeller.rejectReason || '未提供原因'}</p>
+            <p className="text-muted-foreground">重新送審只會把您自己的申請從退回改回待審，不能改成已通過，也不能改別人的申請。</p>
+            <button type="button" onClick={() => void resubmit()} className={btnPrimary}>重新送審</button>
+          </div>
+        )}
+        {!storeOpen && role === 'seller' && sellerStatusReady && !sellerApproved && mySeller?.verify === 'pending' && (
+          <div className={`${panelCls} mt-6 p-8 text-center text-sm text-muted-foreground`}>
+            賣家申請目前是待審核。重新整理後仍以資料庫狀態為準。審核通過前不能進入商品管理、買家訊息或賣場裝潢。
+          </div>
+        )}
+        {!storeOpen && role === 'seller' && sellerStatusReady && !sellerApproved && !mySeller && (
           <div className={`${panelCls} mt-6 p-8 text-center text-sm text-muted-foreground`}>
             賣家中心只開放給已通過認證的賣家。審核中或一般買家不能進入商品管理、買家訊息或賣場裝潢。
           </div>
@@ -11697,7 +12453,7 @@ onClick={async () => {
         )}
 
         {!storeOpen && role === 'seller' && sellerApproved && mySeller && (
-          <div className="mt-6">
+          <div className="mt-6 min-w-0">
             <SellerDashboard
               seller={mySeller}
               productOwnerId={authUserId}
@@ -11733,7 +12489,7 @@ onClick={async () => {
               onSubmitTicket={(t) => submitTicket('seller', t)}
               onReadTicket={readTicket}
               onNotify={notify}
-              coupons={coupons.filter((c) => c.sellerId === mySeller.id && !c.founderPrize && !c.deleted)}
+              coupons={coupons.filter((c) => !!authUserId && c.sellerId === authUserId && !c.founderPrize && !c.deleted)}
               onCreateCoupon={createCoupon}
               onUpdateCoupon={updateCoupon}
               onToggleCouponActive={toggleCouponActive}
@@ -11770,6 +12526,9 @@ onClick={async () => {
                   notify(`登出失敗：${error.message}`)
                   return
                 }
+                sessionUserRef.current = null
+                resetCheckinRef.current()
+                setAuthUserId(null)
                 setAdminAuthed(false)
                 setAccount(null)
                 setSellerAccess(false)
@@ -11782,6 +12541,9 @@ onClick={async () => {
                   notify(`登出失敗：${error.message}`)
                   return
                 }
+                sessionUserRef.current = null
+                resetCheckinRef.current()
+                setAuthUserId(null)
                 setAdminAuthed(false)
                 setAccount(null)
                 setSellerAccess(false)
@@ -11816,7 +12578,7 @@ onClick={async () => {
 
       <SiteFooter onReport={() => setTakedownOpen(true)} onTerms={() => setTermsOpen(true)} />
 
-      {welcomeOpen && <WelcomePromoModal threshold={FREE_SHIP} onClose={() => setWelcomeOpen(false)} />}
+      {welcomeOpen && <WelcomePromoModal threshold={FREE_SHIP} onClose={() => { dismissWelcome(guideOwner(authUserId)); setWelcomeOpen(false) }} />}
       {termsOpen && <TermsModal onClose={() => setTermsOpen(false)} />}
       {forgotOpen && <ForgotPasswordModal onClose={() => setForgotOpen(false)} onNotify={notify} />}
       {recoveryOpen && <SetNewPasswordModal onClose={() => setRecoveryOpen(false)} onNotify={notify} />}
@@ -11824,7 +12586,7 @@ onClick={async () => {
         <OnboardingTour
           role={tourRole}
           onDone={() => {
-            setToursSeen((l) => [...l, tourRole])
+            if (tourRole === 'buyer' || tourRole === 'seller') setToursSeen(rememberTour(guideOwner(authUserId), tourRole))
             setTourRole(null)
           }}
         />
@@ -11839,13 +12601,16 @@ onClick={async () => {
           onClose={() => setProductId(null)}
           onNotify={notify}
           onAdd={(v, q) => {
-            if (addToCart(openProduct.id, v, q)) notify('已加入購物車')
+            void addToCart(openProduct.id, v, q).then((ok) => {
+              if (ok) notify('已加入購物車')
+            })
           }}
           onBuyNow={(v, q) => {
-            if (addToCart(openProduct.id, v, q)) {
+            void addToCart(openProduct.id, v, q).then((ok) => {
+              if (!ok) return
               setProductId(null)
               setCartOpen(true)
-            }
+            })
           }}
           onOpenStore={() => {
             setProductId(null)
@@ -11872,7 +12637,8 @@ onClick={async () => {
           products={products}
           sellers={sellers}
           loggedIn={!!account}
-          buyerName={publicNickname || account?.name || ''}
+          remoteReady={!account || cartRemoteOk}
+          buyerName={memberName}
           onClose={() => setCartOpen(false)}
           onQty={changeQty}
           onRemove={removeLine}
@@ -11915,21 +12681,19 @@ onClick={async () => {
             skew={clockSkew}
             chancesTotal={scratchTotal}
             chancesLeft={scratchLeft}
-            shared={scratchToday.shared}
-            founderLeft={founderLeft}
+            shared={scratchShared}
             card={scratchCard}
-            onStart={startScratch}
-            onReveal={revealScratch}
+            busy={scratchBusy}
+            errorText={scratchError}
+            onStart={() => { void startScratch() }}
+            onReveal={() => { void revealScratch() }}
             onShare={shareForScratch}
-            onGoCoupons={goScratchCoupons}
-            onRecycle={recycleScratch}
-            onGoStore={goScratchStore}
           />
         </Modal>
       )}
 
       {scratchShareOpen && (
-        <ScratchShareModal name={account?.name ?? ''} onClose={() => setScratchShareOpen(false)} onShared={completeScratchShare} />
+        <ScratchShareModal userId={authUserId} onClose={() => { setScratchShareOpen(false); void loadScratch(true) }} />
       )}
 
       {takedownOpen && (
@@ -11962,10 +12726,21 @@ onClick={async () => {
           orders={myBuyerOrders}
           products={products}
           sellers={sellers}
-          buyerName={publicNickname || account.name}
+          buyerName={memberName}
           buyerUserId={authUserId ?? undefined}
           nickname={publicNickname}
           equipped={equippedPerks}
+          ownedPerks={ownedPerks}
+          points={checkinPhase === 'ready' ? points : null}
+          perkBusy={perkBusyUi}
+          onEquipPerk={equipPerk}
+          onOpenPerkShop={() => {
+            setCenterOpen(false)
+            if (storeId || draftPreview) setStoreId(null)
+            setPage('rewards')
+            window.scrollTo({ top: 0, behavior: 'smooth' })
+          }}
+          pointsLabel={checkinPhase === 'ready' ? `${points} 點` : checkinPhase === 'error' ? '暫時無法讀取' : '讀取中'}
           onClose={() => setCenterOpen(false)}
           onAdvance={advanceTrack}
           onReceive={receiveOrder}
@@ -12060,7 +12835,7 @@ onClick={async () => {
             setAdminAuthed(true)
             setRole('admin')
             setPage('market')
-            if (!account) setAccount({ name: '平台管理員' })
+            if (!account) setAccount({ name: '平台管理員', signupNickname: '平台管理員' })
             window.scrollTo({ top: 0, behavior: 'smooth' })
             void loadSellerApplications()
             notify('管理員身分驗證通過')
@@ -12097,14 +12872,17 @@ onClick={async () => {
         />
       )}
 
-      {role === 'buyer' && (page === 'market' || page === 'rewards') && (
+      {role === 'buyer' && (page === 'market' || page === 'rewards' || page === 'arcade') && (
         <MobileTabBar
-          active={page}
-          points={account ? points : 0}
+          active={mallOpen ? 'rewards' : page === 'rewards' ? 'market' : page}
+          points={checkinPhase === 'ready' ? points : checkinPhase === 'guest' ? 0 : null}
           cartCount={cartCount}
+          cartAriaLabel={cartAria}
           centerBadge={centerBadge}
+          centerBadgeError={orderUnread.failed}
           onMarket={() => { if (storeId || draftPreview) setStoreId(null); setPage('market'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-          onRewards={() => { if (storeId || draftPreview) setStoreId(null); setPage('rewards'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+          onArcade={() => { if (storeId || draftPreview) setStoreId(null); setPage('arcade'); setHubTab('rewards'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+          onRewards={openPointsMall}
           onCart={() => setCartOpen(true)}
           onCenter={openCenter}
         />

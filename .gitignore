@@ -7,4 +7,6 @@ node_modules
 
 # Generated files
 .next/
+.next-play/
+.next-play-build/
 *.tsbuildinfo

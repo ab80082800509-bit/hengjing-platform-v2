@@ -21,6 +21,7 @@ import {
   type SellerOrderBucket,
   type SellerReport,
 } from '@/lib/commerce-orders'
+import { OPEN_ORDER_METRIC_LABEL, OPEN_ORDER_METRIC_NOTE, presentCompletedDetail, refundLineAmount, SELLER_ACTION_QUEUE_LABEL, SELLER_ACTION_QUEUE_NOTE } from '@/lib/metric-amount'
 
 const panel = 'rounded-2xl border border-border/70 bg-card shadow-sm'
 const ghost = 'inline-flex items-center justify-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50'
@@ -191,6 +192,9 @@ function OrderDetail({
       {order.stockHoldStatus === 'held' && order.stockHoldExpiresAt && (
         <p className="text-xs text-muted-foreground">庫存保留至 {formatTaipei(order.stockHoldExpiresAt)}。保留到期不會自動標成已付款。</p>
       )}
+      {/* 待辦：cancel_order_when_hold_expires 目前全部是 false，保留到期不會自動取消訂單。
+          到期通知寫的是「訂單沒有自動取消」；若日後打開自動取消，release_expired_inventory_holds 不會再補一則取消通知。
+          啟用該政策前要一併對齊通知。這裡不改交易規則。 */}
       <section aria-label="訂單紀錄">
         <h4 className="text-sm font-black">訂單紀錄</h4>
         {order.events.length === 0 ? (
@@ -382,7 +386,7 @@ export function SellerOrdersPanel({
   useEffect(() => { void load() }, [load, reloadKey])
 
   if (openId) {
-    return <OrderDetail orderId={openId} role="seller" onBack={() => setOpenId(null)} onChanged={() => setReloadKey((n) => n + 1)} />
+    return <OrderDetail orderId={openId} role="seller" stacked onBack={() => setOpenId(null)} onChanged={() => setReloadKey((n) => n + 1)} />
   }
 
   return (
@@ -391,13 +395,14 @@ export function SellerOrdersPanel({
         <div className="flex gap-2">
           {(['all', 'pending'] as const).map((id) => (
             <button key={id} type="button" onClick={() => setBucket(id)} className={bucket === id ? primary : ghost}>
-              {id === 'all' ? '全部訂單' : '待處理'}
+              {id === 'all' ? '全部訂單' : SELLER_ACTION_QUEUE_LABEL}
             </button>
           ))}
         </div>
         <button type="button" onClick={() => setReloadKey((n) => n + 1)} className={ghost}>重新整理</button>
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">只顯示目前登入賣場的訂單。收款確認、出貨、完成與退款尚未串接，不能在這裡標成已完成。</p>
+      {bucket === 'pending' && <p className="text-xs leading-relaxed text-muted-foreground">{SELLER_ACTION_QUEUE_NOTE}</p>}
       {orders == null ? <Message>訂單載入中</Message> : error ? (
         <div className="space-y-3">
           <Message error>{error}</Message>
@@ -406,7 +411,7 @@ export function SellerOrdersPanel({
       ) : orders.length === 0 ? (
         <Message>這個分類目前沒有訂單</Message>
       ) : (
-        <OrderCards orders={orders} onOpen={setOpenId} />
+        <OrderCards orders={orders} stacked onOpen={setOpenId} />
       )}
     </section>
   )
@@ -488,14 +493,14 @@ export function SellerReportPanel({ onOpenOrder }: { onOpenOrder: (orderId: stri
           <button key={id} type="button" onClick={() => applyPreset(id)} className={preset === id ? primary : ghost}>{label}</button>
         ))}
       </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <label className="text-xs font-bold text-muted-foreground">自訂開始
-          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="mt-1 block rounded-xl border border-input bg-card px-3 py-2 text-sm" />
+      <div className="flex flex-col gap-2 min-[480px]:flex-row min-[480px]:flex-wrap min-[480px]:items-end">
+        <label className="min-w-0 text-xs font-bold text-muted-foreground">自訂開始
+          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="mt-1 block w-full min-w-0 max-w-full rounded-xl border border-input bg-card px-3 py-2 text-sm min-[480px]:w-auto" />
         </label>
-        <label className="text-xs font-bold text-muted-foreground">自訂結束
-          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="mt-1 block rounded-xl border border-input bg-card px-3 py-2 text-sm" />
+        <label className="min-w-0 text-xs font-bold text-muted-foreground">自訂結束
+          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="mt-1 block w-full min-w-0 max-w-full rounded-xl border border-input bg-card px-3 py-2 text-sm min-[480px]:w-auto" />
         </label>
-        <button type="button" onClick={applyCustom} className={ghost}>套用區間</button>
+        <button type="button" onClick={applyCustom} className={`${ghost} shrink-0 self-start whitespace-nowrap min-[480px]:self-auto`}>套用區間</button>
       </div>
       {loading ? <Message>報表載入中</Message> : error ? (
         <div className="space-y-3">
@@ -516,28 +521,78 @@ export function SellerReportPanel({ onOpenOrder }: { onOpenOrder: (orderId: stri
               </button>
             ))}
             <button type="button" onClick={() => void openMetric('pending')} className={`${panel} p-4 text-left transition hover:bg-muted/40`}>
-              <p className="text-xs text-muted-foreground">待處理訂單</p>
+              <p className="text-xs text-muted-foreground">{OPEN_ORDER_METRIC_LABEL}</p>
               <p className="mt-1 text-xl font-black">{report.pendingCount}</p>
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{report.pendingNote}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{OPEN_ORDER_METRIC_NOTE}</p>
             </button>
           </div>
           {metric && (
             <div className="space-y-2">
-              <h3 className="text-sm font-black">對應訂單</h3>
+              <h3 className="text-sm font-black">{metric === 'pending' ? OPEN_ORDER_METRIC_LABEL : metric === 'refunded' ? '可信退款明細' : metric === 'completed' ? '已完成訂單明細' : '對應訂單'}</h3>
+              {metric === 'pending' && <p className="text-xs leading-relaxed text-muted-foreground">{OPEN_ORDER_METRIC_NOTE}</p>}
+              {metric === 'refunded' && (
+                <p className="text-xs leading-relaxed text-muted-foreground">每一列是一筆可信退款。粗體金額是該筆退款，訂單總額另外標出，兩者不是同一個數字。列入區間的時間與上方統計相同，都是退款建立時間。明細最多列出 100 筆；超過時上方筆數與金額仍是這個區間的全部合計。正式退款仍未開放。</p>
+              )}
+              {metric === 'refunded' && rows?.some((row) => !row.refundId) && (
+                <p className="text-xs leading-relaxed text-muted-foreground">這份明細還沒有逐筆退款編號與退款金額，訂單總額不會拿來充當退款。請先審查並套用退款明細 SQL，筆數才會與上方統計對齊。</p>
+              )}
+              {metric === 'completed' && (
+                <p className="text-xs leading-relaxed text-muted-foreground">每一列的主要金額是這張訂單的剩餘明細，算法與上方已完成訂單金額相同：各項（數量減已退數量）乘上單價後加總。訂單總額另外標出，兩者不是同一個數字。全部退貨的訂單不會列入。明細最多列出 100 筆；超過時上方筆數與金額仍是這個區間的全部合計。</p>
+              )}
+              {metric === 'completed' && rows?.some((row) => row.completedRemainingAmount === undefined) && (
+                <p className="text-xs leading-relaxed text-muted-foreground">這份明細還沒有已完成剩餘明細金額，訂單總額不會拿來充當統計金額。請先審查並套用已完成金額 SQL，明細才會與上方已完成金額對齊。</p>
+              )}
               {rows == null ? <Message>明細載入中</Message> : rowError ? <Message error>{rowError}</Message> : rows.length === 0 ? (
-                <Message>這個指標目前是 0，沒有對應訂單</Message>
+                <Message>{metric === 'refunded' ? '這個區間沒有可信退款' : '這個指標目前是 0，沒有對應訂單'}</Message>
               ) : (
                 <ul className="space-y-2">
-                  {rows.map((row) => (
-                    <li key={row.orderId}>
-                      <button type="button" onClick={() => onOpenOrder(row.orderId)} className={`${panel} flex w-full flex-wrap items-center gap-2 p-3 text-left`}>
-                        <span className="font-mono text-sm font-bold">{row.displayNo}</span>
+                  {rows.map((row, index) => {
+                    const refundShown = metric === 'refunded' ? refundLineAmount(row.refundAmount) : null
+                    const completedShown = metric === 'completed'
+                      ? presentCompletedDetail(row.completedRemainingAmount, row.orderTotal)
+                      : null
+                    return (
+                    <li key={row.refundId ?? `${row.orderId}:${index}`}>
+                      <button type="button" onClick={() => onOpenOrder(row.orderId)} className={`${panel} flex w-full min-w-0 flex-wrap items-center gap-2 p-3 text-left`}>
+                        <span className="max-w-full break-all font-mono text-sm font-bold">{row.displayNo}</span>
                         <Status stage={row.buyerStage} label={row.buyerStageLabel} />
-                        <span className="text-xs text-muted-foreground">{formatTaipei(row.createdAt)}</span>
-                        <span className="ml-auto font-bold">{formatTwd(row.orderTotal)}</span>
+                        {metric === 'refunded' ? (
+                          <>
+                            <span className="text-xs text-muted-foreground">{row.refundCreatedAt ? `退款時間 ${formatTaipei(row.refundCreatedAt)}` : '退款時間無法讀取'}</span>
+                            <span className="text-xs text-muted-foreground">訂單成立 {formatTaipei(row.createdAt)}</span>
+                          </>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{formatTaipei(row.createdAt)}</span>
+                        )}
+                        {refundShown ? (
+                          <span className="min-w-0 text-right min-[480px]:ml-auto">
+                            <span className="block text-sm font-bold">
+                              {refundShown.kind === 'amount'
+                                ? `可信退款 ${formatTwd(refundShown.amount)}`
+                                : refundShown.kind === 'unreadable'
+                                  ? '退款金額無法確認'
+                                  : '沒有讀到這筆退款金額'}
+                            </span>
+                            <span className="block text-[11px] text-muted-foreground">訂單總額 {formatTwd(row.orderTotal)}，不是這筆退款金額</span>
+                          </span>
+                        ) : completedShown ? (
+                          <span className="min-w-0 text-right min-[480px]:ml-auto">
+                            <span className="block text-base font-black">
+                              {completedShown.kind === 'amount'
+                                ? `已完成剩餘明細 ${formatTwd(completedShown.amount)}`
+                                : completedShown.kind === 'unreadable'
+                                  ? '已完成剩餘明細金額無法確認'
+                                  : '沒有讀到已完成剩餘明細金額'}
+                            </span>
+                            <span className="block text-[11px] text-muted-foreground">訂單總額 {formatTwd(completedShown.orderTotal)}，不是這筆已完成統計金額</span>
+                          </span>
+                        ) : (
+                          <span className="font-bold min-[480px]:ml-auto">{formatTwd(row.orderTotal)}</span>
+                        )}
                       </button>
                     </li>
-                  ))}
+                    )
+                  })}
                 </ul>
               )}
             </div>
@@ -565,7 +620,7 @@ export function OrderNotifications({
     const result = await listMyOrderNotifications(50)
     setLoading(false)
     if (result.error) {
-      setRows([])
+      setRows(null)
       setError(result.error)
       return
     }
@@ -587,12 +642,12 @@ export function OrderNotifications({
     onOpenOrder(orderId)
   }
 
-  const unread = rows?.filter((row) => !row.readAt).length ?? 0
+  const unread = rows?.filter((row) => !row.readAt).length
 
   return (
     <section className="space-y-3" aria-label="訂單通知">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-base font-black">訂單通知{rows ? `（未讀 ${unread}）` : ''}</h2>
+        <h2 className="text-base font-black">訂單通知{error ? '（未讀數無法讀取）' : unread == null ? '' : `（未讀 ${unread}）`}</h2>
         <button type="button" onClick={() => void load()} className={ghost}>重新整理</button>
       </div>
       {loading ? <Message>通知載入中</Message> : error ? (
@@ -649,14 +704,14 @@ export function SellerSnapshotCards() {
 
   return (
     <>
-      <div className={`${panel} p-4`}>
-        <p className="text-xs text-muted-foreground">待處理訂單</p>
+      <div className={`${panel} min-w-0 break-words p-4`}>
+        <p className="text-xs text-muted-foreground">{OPEN_ORDER_METRIC_LABEL}</p>
         <p className="text-base font-black">{error ? '無法讀取' : pending == null ? '讀取中' : pending}</p>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">不受日期影響，只算目前仍待處理的真實訂單</p>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">進行中且退款狀態為無，含待收貨。不是「待賣家處理」，也不受日期影響。</p>
       </div>
-      <div className={`${panel} p-4`}>
+      <div className={`${panel} min-w-0 break-words p-4`}>
         <p className="text-xs text-muted-foreground">近 30 天成立金額</p>
-        <p className="text-base font-black">{error ? '無法讀取' : placed == null ? '讀取中' : formatTwd(placed)}</p>
+        <p className="break-words text-base font-black">{error ? '無法讀取' : placed == null ? '讀取中' : formatTwd(placed)}</p>
         <p className="text-[11px] leading-relaxed text-muted-foreground">成立訂單金額，不是已收款，也不是平台收入</p>
       </div>
     </>
@@ -664,20 +719,28 @@ export function SellerSnapshotCards() {
 }
 
 export function useOrderUnread(active: boolean) {
-  const [count, setCount] = useState(0)
+  const [count, setCount] = useState<number | null>(null)
+  const [failed, setFailed] = useState(false)
   const [version, setVersion] = useState(0)
   const reload = useCallback(() => setVersion((n) => n + 1), [])
   useEffect(() => {
     if (!active) {
-      setCount(0)
+      setCount(null)
+      setFailed(false)
       return
     }
     let stop = false
     void listMyOrderNotifications(50).then((result) => {
-      if (stop || result.error || !result.data) return
+      if (stop) return
+      if (result.error || !result.data) {
+        setCount(null)
+        setFailed(true)
+        return
+      }
+      setFailed(false)
       setCount(result.data.filter((row) => !row.readAt).length)
     })
     return () => { stop = true }
   }, [active, version])
-  return { count, reload }
+  return { count, failed, reload }
 }

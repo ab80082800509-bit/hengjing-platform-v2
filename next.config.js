@@ -18,12 +18,14 @@ function supabaseStoragePattern() {
 
 const storagePattern = supabaseStoragePattern()
 
+// 3000 維持 .next。只有試玩程序明示 PLAY_DIST_DIR 時才改用獨立輸出，避免和第二個 next dev 搶同一份編譯結果。
+const playDist = process.env.PLAY_DIST_DIR
+const distDir = playDist === '.next-play' || playDist === '.next-play-build' ? playDist : '.next'
+
 const nextConfig = {
+  distDir,
   typescript: {
     ignoreBuildErrors: true,
-  },
-  eslint: {
-    ignoreDuringBuilds: true,
   },
   images: {
     remotePatterns: storagePattern ? [storagePattern] : [],

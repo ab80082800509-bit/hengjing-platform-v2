@@ -122,7 +122,7 @@ function CouponStats({ c }: { c: CouponLike }) {
         數據追蹤
         <span className="font-mono text-[11px] font-bold tracking-wider text-muted-foreground">{c.code}</span>
       </h3>
-      <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <dl className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 md:grid-cols-4">
         {metrics.map((m) => (
           <div key={m.label} className="rounded-xl border border-border/70 bg-card px-3 py-2.5">
             <dt className="text-[11px] font-bold text-muted-foreground">{m.label}</dt>
@@ -206,7 +206,7 @@ export function CouponList({
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-4">
         <StatCard label="進行中" value={`${counts.active}`} hint={`共 ${coupons.length} 張折價券`} />
         <StatCard label="累計已領取" value={totalClaimed.toLocaleString('en-US')} hint="張" />
         <StatCard label="已使用訂單" value={totalUsed.toLocaleString('en-US')} hint="筆訂單已折抵" />
@@ -268,14 +268,14 @@ export function CouponList({
               const statsOpen = statsId === c.id
               return (
                 <li key={c.id} className="px-4 py-4">
-                  <div className={`grid grid-cols-2 gap-3 lg:items-center ${COLS}`}>
-                    <div className="order-1 col-span-2 flex min-w-0 items-start gap-3 lg:order-none lg:col-span-1">
+                  <div className={`grid min-w-0 grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:items-center ${COLS}`}>
+                    <div className="order-1 flex min-w-0 items-start gap-3 min-[480px]:col-span-2 lg:order-none lg:col-span-1">
                       <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${status === 'active' ? 'bg-accent text-brand-ink' : 'bg-muted text-muted-foreground'}`}>
                         <Icon className="size-5" aria-hidden />
                       </span>
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-black text-foreground">{label}</p>
-                        <p className="mt-0.5 inline-block rounded-md border border-dashed border-border px-1.5 py-0.5 font-mono text-[11px] font-bold tracking-wider text-muted-foreground">
+                        <p className="break-words text-sm font-black text-foreground">{label}</p>
+                        <p className="mt-0.5 inline-block max-w-full break-all rounded-md border border-dashed border-border px-1.5 py-0.5 font-mono text-[11px] font-bold tracking-wider text-muted-foreground">
                           {c.code}
                         </p>
                       </div>
@@ -305,9 +305,9 @@ export function CouponList({
                       </div>
                     </div>
 
-                    <div className="order-4 col-span-2 lg:order-none lg:col-span-1">
+                    <div className="order-4 min-[480px]:col-span-2 lg:order-none lg:col-span-1">
                       <CellLabel>門檻與折扣</CellLabel>
-                      <p className="text-sm font-bold text-brand-ink">{couponTitle(c)}</p>
+                      <p className="break-words text-sm font-bold text-brand-ink">{couponTitle(c)}</p>
                     </div>
 
                     <div className="order-5 text-xs lg:order-none">
@@ -331,7 +331,7 @@ export function CouponList({
 
                     <div className="order-6 text-xs lg:order-none">
                       <CellLabel>有效期限</CellLabel>
-                      <p className="flex items-center gap-1 font-medium text-foreground">
+                      <p className="flex min-w-0 items-start gap-1 break-words font-medium text-foreground">
                         <CalendarDays className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                         {c.startAt && c.endAt ? `${slashDate(c.startAt)} ~ ${slashDate(c.endAt)}` : '不限期間'}
                       </p>
@@ -340,7 +340,7 @@ export function CouponList({
                       )}
                     </div>
 
-                    <div className="order-7 col-span-2 flex flex-wrap items-center gap-1.5 lg:order-none lg:col-span-1 lg:justify-end">
+                    <div className="order-7 flex flex-wrap items-center gap-1.5 min-[480px]:col-span-2 lg:order-none lg:col-span-1 lg:justify-end">
                       <ActionButton text="數據" label={`查看 ${label} 數據追蹤`} pressed={statsOpen} onClick={() => setStatsId(statsOpen ? null : c.id)}>
                         <BarChart3 className="size-3.5" aria-hidden />
                       </ActionButton>

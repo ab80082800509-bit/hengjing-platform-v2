@@ -1,0 +1,196 @@
+/* 遊樂園、節慶、獎勵、成就與點數商城。全部限定在 .fx-* / .pa-* / .ms-fest，不改網站其他區塊。 */
+
+/* ---------- 節慶橫幅 ---------- */
+.fx-banner{--fx-accent:#f97316;--fx-soft:#fff1e2;--fx-glow:#fdba74;position:relative;display:flex;align-items:center;gap:12px;overflow:hidden;border-radius:20px;
+  border:1px solid color-mix(in srgb,var(--fx-accent) 55%,transparent);
+  background:radial-gradient(120% 140% at 100% 0%,color-mix(in srgb,var(--fx-accent) 34%,transparent),transparent 60%),linear-gradient(135deg,#27272a,#1f1f23);
+  padding:14px 16px;color:#f4f4f5}
+.fx-banner::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:linear-gradient(var(--fx-glow),var(--fx-accent))}
+.fx-copy{position:relative;z-index:1;min-width:0;flex:1}
+.fx-eyebrow{display:inline-block;font-size:11px;font-weight:900;letter-spacing:.04em;color:#18181b;background:var(--fx-glow);border-radius:999px;padding:1px 9px}
+.fx-title{margin-top:6px;display:flex;align-items:center;gap:8px;font-size:18px;font-weight:900;line-height:1.2}
+.fx-motif{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:10px;background:var(--fx-accent);color:#fff;font-size:15px;box-shadow:0 0 0 3px color-mix(in srgb,var(--fx-accent) 30%,transparent)}
+.fx-text{margin-top:4px;font-size:12.5px;line-height:1.6;color:#d4d4d8;text-wrap:pretty}
+.fx-art{flex:none;width:150px;height:94px;overflow:visible}
+.fx-compact .fx-art{width:120px;height:76px}
+@media (max-width:420px){.fx-art{width:104px;height:66px}.fx-title{font-size:16px}.fx-compact .fx-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}}
+
+.fx-sway{animation:fx-sway 3.2s ease-in-out infinite}
+@keyframes fx-sway{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
+.fx-pulse{animation:fx-pulse 3s ease-in-out infinite;transform-origin:center;transform-box:fill-box}
+@keyframes fx-pulse{50%{transform:scale(1.12);opacity:.55}}
+.fx-twinkle{animation:fx-twinkle 1.8s ease-in-out infinite}
+@keyframes fx-twinkle{50%{opacity:.2}}
+.fx-spin-slow{animation:fx-spin 24s linear infinite;transform-box:fill-box;transform-origin:center}
+@keyframes fx-spin{to{rotate:360deg}}
+.fx-burst{animation:fx-burst 2.2s ease-out infinite;transform-origin:0 0}
+@keyframes fx-burst{0%{transform:scale(.2);opacity:0}20%{opacity:1}70%{transform:scale(1);opacity:1}100%{transform:scale(1.15);opacity:0}}
+.fx-fall{animation:fx-fall 3.6s linear infinite}
+@keyframes fx-fall{from{transform:translateY(-10px);opacity:0}15%{opacity:1}to{transform:translateY(96px);opacity:0}}
+.fx-bob{animation:fx-bob 2.4s ease-in-out infinite}
+@keyframes fx-bob{50%{transform:translateY(-3px) rotate(-1.5deg)}}
+
+/* ---------- 合成小舖店面掛飾（不擋點擊） ---------- */
+.ms-game .ms-fest{position:absolute;left:0;right:0;top:0;height:64px;pointer-events:none;z-index:0}
+.ms-game .ms-fest-garland{position:absolute;inset:0 0 auto;width:100%;height:46px}
+.ms-game .ms-fest-sign{position:absolute;top:6px;left:50%;transform:translateX(-50%);background:var(--fx-accent);color:#fff7d6;font-weight:900;font-size:12px;letter-spacing:.12em;
+  padding:2px 12px;border:2px solid #4a2c1a;border-radius:6px;box-shadow:0 2px 0 #4a2c1a;white-space:nowrap}
+.ms-game .ms-fest-flake{position:absolute;top:0;width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 4px rgba(255,255,255,.9);animation:fx-fall 4.2s linear infinite}
+
+/* ---------- 遊樂園共用 ---------- */
+.pa-hub{--pa-cream:#fff7ea;--pa-ink:#4a2c1a;--pa-orange:#f97316}
+.pa-section-title{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:900}
+.pa-section-title small{font-size:12px;font-weight:700;color:#a1a1aa}
+.pa-card{border-radius:20px;border:1px solid rgb(63 63 70 / .6);background:linear-gradient(180deg,#2a2a2e,#232327);padding:16px}
+.pa-chip{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:900;white-space:nowrap}
+.pa-chip.open{background:#16a34a;color:#fff}
+.pa-chip.soon{background:#3f3f46;color:#d4d4d8}
+.pa-chip.existing{background:#fb923c;color:#18181b}
+.pa-chip.warn{background:#facc15;color:#422006}
+.pa-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:999px;padding:9px 16px;font-size:13px;font-weight:900;transition:transform .12s,filter .12s;min-height:40px}
+.pa-btn:active{transform:translateY(1px) scale(.98)}
+.pa-btn:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}
+.pa-btn.primary{background:linear-gradient(#fb923c,#f97316);color:#1c1007;box-shadow:0 3px 0 #9a3412}
+.pa-btn.ghost{border:1px solid rgb(82 82 91);background:#27272a;color:#f4f4f5}
+.pa-btn:disabled,.pa-btn[aria-disabled=true]{filter:grayscale(.8);opacity:.6;cursor:not-allowed;box-shadow:none}
+.pa-art{display:block}
+.pa-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* ---------- 遊戲入口 ---------- */
+.pa-games{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+.pa-game{position:relative;display:flex;flex-direction:column;overflow:hidden;border-radius:22px;border:1px solid rgb(63 63 70 / .7);background:#232327;transition:transform .2s,box-shadow .2s}
+.pa-game.is-open:hover{transform:translateY(-3px);box-shadow:0 14px 30px -12px rgba(249,115,22,.45)}
+.pa-cover{position:relative;height:150px;overflow:hidden;border-bottom:3px solid var(--pa-ink)}
+.pa-cover svg.pa-cover-art{position:absolute;inset:0;width:100%;height:100%}
+.pa-cover .fx-art.pa-cover-fx{position:absolute;top:2px;right:2px;width:104px;height:66px;pointer-events:none;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))}
+.pa-game.is-soon .pa-cover-art{filter:grayscale(.55) brightness(.8)}
+.pa-lock{position:absolute;inset:0;display:grid;place-items:center;background:repeating-linear-gradient(135deg,rgba(24,24,27,.35) 0 14px,rgba(24,24,27,.55) 14px 28px)}
+.pa-lock span{display:inline-flex;align-items:center;gap:6px;background:#18181b;color:#fafafa;border:2px solid #fafafa;border-radius:999px;padding:5px 14px;font-weight:900;font-size:13px;transform:rotate(-4deg);box-shadow:0 4px 0 rgba(0,0,0,.35)}
+.pa-game-body{display:flex;flex-direction:column;gap:6px;padding:14px 14px 16px;flex:1}
+.pa-game-body h3{font-size:17px;font-weight:900}
+.pa-game-body p{font-size:12.5px;color:#a1a1aa;line-height:1.6}
+.pa-game-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pa-game-cta{margin-top:auto;padding-top:6px}
+.pa-ribbon{position:absolute;top:10px;left:-34px;transform:rotate(-35deg);background:var(--fx-accent,#f97316);color:#fff;font-size:11px;font-weight:900;padding:3px 40px;box-shadow:0 2px 0 rgba(0,0,0,.25);z-index:2}
+
+/* ---------- 獎勵 HUD ---------- */
+.pa-reward{display:grid;gap:14px}
+.pa-reward-top{display:grid;gap:12px;grid-template-columns:auto 1fr;align-items:center}
+.pa-ring{position:relative;width:96px;height:96px}
+.pa-ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.pa-ring circle{fill:none;stroke-width:10}
+.pa-ring .track{stroke:#3f3f46}
+.pa-ring .fill{stroke:url(#pa-ring-grad);stroke-linecap:round;transition:stroke-dashoffset .8s cubic-bezier(.3,1.2,.5,1)}
+.pa-ring-label{position:absolute;inset:0;display:grid;place-content:center;text-align:center;line-height:1.1}
+.pa-ring-label b{font-size:24px;font-weight:900}
+.pa-ring-label small{font-size:10.5px;color:#a1a1aa;font-weight:700}
+.pa-meters{display:grid;gap:8px}
+.pa-meter{display:grid;gap:4px}
+.pa-meter-head{display:flex;justify-content:space-between;font-size:12px;font-weight:800;color:#d4d4d8}
+.pa-meter-bar{position:relative;height:10px;border-radius:999px;background:#3f3f46;overflow:hidden}
+.pa-meter-bar i{position:absolute;inset:0 auto 0 0;border-radius:999px;background:linear-gradient(90deg,#fdba74,#f97316);transition:width .8s cubic-bezier(.3,1.2,.5,1)}
+.pa-meter-bar i.weekly{background:linear-gradient(90deg,#86efac,#16a34a)}
+.pa-withheld{display:flex;gap:10px;align-items:flex-start;border-radius:14px;border:1px dashed #facc15;background:rgba(250,204,21,.08);padding:10px 12px;font-size:12px;line-height:1.6;color:#fde68a}
+.pa-withheld svg{flex:none;width:20px;height:20px;margin-top:1px}
+.pa-tasks{display:grid;gap:8px}
+.pa-task{position:relative;display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:center;border-radius:16px;border:1px solid rgb(63 63 70 / .8);background:#1f1f23;padding:8px 10px;transition:border-color .2s,background .2s}
+.pa-task-icon{position:relative;width:52px;height:52px;border-radius:14px;background:var(--pa-cream);border:2px solid var(--pa-ink);box-shadow:inset 0 -4px 0 #f1d3a8;display:grid;place-items:center;overflow:hidden}
+.pa-task-icon svg{width:44px;height:44px}
+.pa-task-name{font-size:14px;font-weight:900;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pa-task-sub{font-size:11.5px;color:#a1a1aa;margin-top:2px}
+.pa-task-prog{margin-top:5px;height:6px;border-radius:9px;background:#3f3f46;overflow:hidden}
+.pa-task-prog i{display:block;height:100%;background:linear-gradient(90deg,#fdba74,#f97316);border-radius:9px;transition:width .6s}
+.pa-task-side{display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:84px}
+.pa-pts{display:inline-flex;align-items:center;gap:3px;font-weight:900;font-size:13px;color:#fdba74}
+.pa-pts svg{width:16px;height:16px}
+.pa-task[data-status=claimable]{border-color:#f97316;background:linear-gradient(90deg,rgba(249,115,22,.16),#1f1f23 60%)}
+.pa-task[data-status=claimable] .pa-task-icon{animation:pa-wiggle 1.4s ease-in-out infinite}
+@keyframes pa-wiggle{0%,100%{transform:rotate(0)}20%{transform:rotate(-6deg)}40%{transform:rotate(6deg)}60%{transform:rotate(-3deg)}}
+.pa-task[data-status=claimed]{border-color:rgb(22 163 74 / .7);background:linear-gradient(90deg,rgba(22,163,74,.14),#1f1f23 60%)}
+.pa-task[data-status=claimed] .pa-task-icon::after{content:"";position:absolute;inset:0;background:rgba(22,163,74,.55) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/26px no-repeat}
+.pa-task[data-festival=on]{border-color:rgb(251 191 36 / .55)}
+.pa-task[data-status=capped]{opacity:.78}
+.pa-task[data-status=capped] .pa-task-icon{filter:grayscale(.7)}
+.pa-task[data-status=locked]{opacity:.62}
+.pa-task[data-status=locked] .pa-task-icon{background:#3f3f46;box-shadow:none;border-color:#52525b}
+.pa-task-claim{border-radius:999px;padding:6px 12px;font-size:12px;font-weight:900;background:linear-gradient(#93e861,#3fae2a);color:#fff;border:2px solid var(--pa-ink);box-shadow:0 3px 0 var(--pa-ink);text-shadow:0 1px 0 #1f6b14;min-height:34px}
+.pa-task-claim:active{transform:translateY(2px);box-shadow:0 1px 0 var(--pa-ink)}
+.pa-task-claim:disabled{filter:grayscale(1);opacity:.6}
+.pa-burst{position:absolute;right:28px;top:50%;width:0;height:0;pointer-events:none}
+.pa-burst i{position:absolute;width:8px;height:8px;border-radius:2px;background:var(--c);animation:pa-pop .8s cubic-bezier(.15,.8,.3,1) forwards}
+@keyframes pa-pop{from{transform:translate(0,0) scale(.4)}to{transform:translate(var(--dx),var(--dy)) scale(1) rotate(160deg);opacity:0}}
+.pa-tabs{display:flex;gap:6px;flex-wrap:wrap}
+.pa-tab{border-radius:999px;border:1px solid rgb(82 82 91);padding:6px 12px;font-size:12px;font-weight:900;color:#d4d4d8;background:#27272a;min-height:34px}
+.pa-tab[aria-selected=true],.pa-tab[aria-pressed=true]{background:#f97316;border-color:#f97316;color:#1c1007}
+
+/* ---------- 成就牆 ---------- */
+.pa-showcase{display:flex;align-items:center;gap:14px;border-radius:18px;padding:12px 14px;background:radial-gradient(120% 120% at 0% 0%,rgba(249,115,22,.22),transparent 60%),#1f1f23;border:1px solid rgb(249 115 22 / .4)}
+.pa-showcase-name{font-size:16px;font-weight:900;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.pa-showcase-sub{font-size:12px;color:#a1a1aa;margin-top:2px}
+.pa-gbadge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:2px 9px 2px 3px;font-size:11px;font-weight:900;background:#fff7ea;color:#4a2c1a;border:1.5px solid #4a2c1a}
+.pa-gbadge svg{width:18px;height:18px}
+.pa-medals{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(132px,1fr))}
+.pa-medal{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;border-radius:18px;border:1px solid rgb(63 63 70 / .8);background:#1f1f23;padding:12px 8px 10px;transition:transform .2s,border-color .2s}
+.pa-medal svg.pa-medal-art{width:78px;height:92px;filter:drop-shadow(0 6px 6px rgba(0,0,0,.35))}
+.pa-medal.locked svg.pa-medal-art{filter:grayscale(1) brightness(.55)}
+.pa-medal.locked .pa-medal-name{color:#a1a1aa}
+.pa-medal.pending{border-style:dashed;opacity:.82}
+.pa-medal.pending .pa-medal-foot{color:#0369a1}
+.pa-medal.unlocked{border-color:color-mix(in srgb,var(--tier) 70%,transparent);background:radial-gradient(100% 80% at 50% 0%,color-mix(in srgb,var(--tier) 22%,transparent),#1f1f23 70%)}
+.pa-medal.unlocked:hover{transform:translateY(-2px)}
+.pa-medal.equipped::after{content:"展示中";position:absolute;top:8px;right:8px;font-size:10px;font-weight:900;background:#f97316;color:#1c1007;padding:1px 7px;border-radius:999px}
+.pa-medal.fresh{animation:pa-medal-in .9s cubic-bezier(.3,1.6,.5,1)}
+@keyframes pa-medal-in{0%{transform:scale(.4) rotate(-12deg);opacity:0}100%{transform:none;opacity:1}}
+.pa-medal-name{font-size:13.5px;font-weight:900}
+.pa-medal-detail{font-size:11px;color:#a1a1aa;line-height:1.5;min-height:33px}
+.pa-medal-prog{width:100%;height:6px;border-radius:9px;background:#3f3f46;overflow:hidden}
+.pa-medal-prog i{display:block;height:100%;background:var(--tier);border-radius:9px}
+.pa-medal-foot{font-size:11px;font-weight:800;color:#d4d4d8}
+.pa-medal button{margin-top:2px;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:900;border:1px solid rgb(82 82 91);background:#27272a;min-height:32px}
+.pa-medal button[aria-pressed=true]{background:#f97316;color:#1c1007;border-color:#f97316}
+.pa-medal .shine{position:absolute;inset:0;border-radius:18px;pointer-events:none;background:linear-gradient(115deg,transparent 35%,rgba(255,255,255,.12) 50%,transparent 65%);background-size:250% 100%;animation:pa-shine 3.6s ease-in-out infinite}
+@keyframes pa-shine{0%{background-position:150% 0}60%,100%{background-position:-60% 0}}
+.pa-unlock-toast{position:fixed;left:50%;bottom:calc(88px + env(safe-area-inset-bottom));z-index:80;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:#18181b;border:2px solid #f97316;border-radius:18px;padding:8px 16px 8px 8px;box-shadow:0 12px 30px rgba(0,0,0,.45);animation:pa-toast 3.6s ease forwards;max-width:92vw}
+.pa-unlock-toast svg{width:44px;height:52px;flex:none}
+.pa-unlock-toast b{display:block;font-size:14px}
+.pa-unlock-toast small{font-size:11.5px;color:#fdba74;font-weight:800}
+@keyframes pa-toast{0%{transform:translate(-50%,30px);opacity:0}10%,85%{transform:translate(-50%,0);opacity:1}100%{transform:translate(-50%,10px);opacity:0}}
+
+/* ---------- 點數商城 ---------- */
+.pa-mall-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.pa-balance{display:inline-flex;align-items:center;gap:6px;border-radius:999px;background:#18181b;border:1px solid rgb(249 115 22 / .5);padding:4px 12px 4px 4px;font-weight:900}
+.pa-balance svg{width:26px;height:26px}
+.pa-zones{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.pa-zone{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;border-radius:16px;border:1px solid rgb(63 63 70);background:#1f1f23;padding:10px 12px;min-height:72px;overflow:hidden}
+.pa-zone[aria-selected=true]{border-color:#f97316;background:linear-gradient(160deg,rgba(249,115,22,.25),#1f1f23 70%)}
+.pa-zone b{font-size:13.5px;font-weight:900}
+.pa-zone small{font-size:11px;color:#a1a1aa;line-height:1.4}
+.pa-zone svg{position:absolute;right:-6px;bottom:-8px;width:52px;height:52px;opacity:.9}
+@media (max-width:480px){.pa-zones{grid-template-columns:1fr}.pa-zone{min-height:56px}}
+.pa-items{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
+.pa-item{position:relative;display:flex;flex-direction:column;gap:6px;border-radius:16px;border:1px solid rgb(63 63 70);background:#1f1f23;padding:10px}
+.pa-item-stage{position:relative;height:86px;border-radius:12px;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 50% 30%,#3a2c20,#18181b)}
+.pa-item-stage>svg:not([class]){width:56px;height:56px}
+.pa-item-stage.pa-fill{display:block}
+.pa-reason{color:#fbbf24;font-weight:700}
+.pa-cats{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
+.pa-cat{flex:none;border-radius:999px;border:1px solid rgb(82 82 91);padding:4px 10px;font-size:12px;font-weight:800;color:#d4d4d8;background:transparent;white-space:nowrap}
+.pa-cat[aria-pressed=true]{background:#f97316;border-color:#f97316;color:#1c1007}
+.pa-item-name{font-size:13px;font-weight:900;line-height:1.35}
+.pa-item-sub{font-size:11px;color:#a1a1aa}
+.pa-item-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:auto}
+.pa-state{font-size:11px;font-weight:900;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.pa-state.owned{background:#16a34a;color:#fff}
+.pa-state.equipped{background:#f97316;color:#1c1007}
+.pa-state.closed{background:#3f3f46;color:#d4d4d8}
+.pa-state.planned{background:#1e3a8a;color:#dbeafe}
+.pa-state.locked{background:#52525b;color:#e4e4e7}
+.pa-state.ready{background:#facc15;color:#422006}
+.pa-planned{position:relative;border-style:dashed}
+.pa-planned .pa-item-stage{background:repeating-linear-gradient(135deg,#232327 0 10px,#27272a 10px 20px)}
+.pa-empty{border-radius:16px;border:1px dashed rgb(82 82 91);padding:18px;text-align:center;font-size:12.5px;color:#a1a1aa;line-height:1.7}
+
+@media (prefers-reduced-motion:reduce){
+  .fx-banner *,.ms-game .ms-fest *,.pa-hub *,.pa-unlock-toast{animation:none!important;transition:none!important}
+  .ms-game .ms-fest-flake{display:none}
+}

@@ -77,7 +77,7 @@ export function SellerGateModal({ onClose, onUpgrade, onDemo }: SellerGateModalP
             您目前是以「買家」身分瀏覽
           </h2>
           <p id="seller-gate-desc" className="mt-2 text-pretty text-sm leading-relaxed text-muted-foreground">
-            這是賣家專屬的管理中心。如果您也想在此平台開設自己的專屬商店、享有蝦皮一鍵搬家、自動簡訊提醒與雲端發票功能，歡迎立即升級為創始店長（月費 NT$ 599，另加 5% 營業稅，含稅 NT$ 629）！
+            這是賣家專屬的管理中心。如果您也想在此平台開設自己的專屬商店、享有蝦皮一鍵搬家、自動簡訊提醒與雲端發票功能，歡迎立即升級為創始店長（月費未稅 NT$400、稅額 NT$20、含稅實付 NT$420）。
           </p>
 
           <ul className="mt-4 space-y-2">

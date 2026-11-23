@@ -1,24 +1,43 @@
 import {
   BadgeCheck,
+  Bird,
+  Cat,
   Clover,
   Compass,
   Crown,
+  CupSoda,
+  Dog,
+  Droplets,
   Flame,
+  Flower2,
+  Gamepad2,
   Gem,
+  Grid3x3,
+  Heart,
+  Lightbulb,
+  MessageCircle,
   Moon,
   Palette,
+  PartyPopper,
   Rocket,
   Search,
   ShieldCheck,
   ShoppingCart,
+  Smile,
+  Snowflake,
+  Sparkles,
+  Star,
+  StickyNote,
+  Store,
+  Sunset,
   Coins,
   Trophy,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
+import { PERK_CATALOG, type PerkCategory, type PerkId, type PerkRarity } from '@/lib/rewards/perk-catalog'
 
-export type PerkCategory = 'frame' | 'badge' | 'title' | 'skin'
-export type PerkRarity = 'common' | 'rare' | 'epic' | 'legendary'
+export type { EquippedPerks, PerkCategory, PerkRarity } from '@/lib/rewards/perk-catalog'
 
 export interface Perk {
   id: string
@@ -36,9 +55,17 @@ export const CATEGORY_META: Record<PerkCategory, { label: string; place: string 
   badge: { label: '評價區勳章', place: '商品評價區的名字旁' },
   title: { label: '個人頭銜', place: '私訊與個人中心' },
   skin: { label: '主頁主題 Skin', place: '個人中心背景' },
+  bubble: { label: '聊天氣泡', place: '賣場聊聊裡你送出的訊息' },
+  pet: { label: '寵物夥伴', place: '名字旁、成就牆與夢想商店街' },
+  decor: { label: '商店街裝潢', place: '你的夢想商店街，訪客也看得到' },
+  board: { label: '方塊棋盤', place: '方塊大挑戰的棋盤' },
+  scene: { label: '遊戲場景', place: '遊樂園、合成小舖與方塊大挑戰背景' },
+  effect: { label: '個人頁特效', place: '個人中心與成就牆，點擊有互動' },
+  collection: { label: '節慶限定收藏', place: '名字旁的動態徽章' },
+  sticker: { label: '動態貼圖', place: '賣場聊聊的貼圖選單' },
 }
 
-export const CATEGORY_ORDER: PerkCategory[] = ['frame', 'badge', 'title', 'skin']
+export const CATEGORY_ORDER: PerkCategory[] = ['frame', 'badge', 'title', 'skin', 'bubble', 'pet', 'decor', 'board', 'scene', 'effect', 'collection', 'sticker']
 
 export const RARITY_ORDER: PerkRarity[] = ['common', 'rare', 'epic', 'legendary']
 
@@ -76,24 +103,52 @@ export const RARITY_META: Record<
   },
 }
 
-export const PERKS: Perk[] = [
-  { id: 'frame-founder', name: '創始會員光環頭像框', label: '創始會員光環', category: 'frame', rarity: 'rare', cost: 100, effect: '專屬橘色微光流動邊框', icon: Crown },
-  { id: 'frame-blackdiamond', name: '尊爵黑鑽極致框', label: '尊爵黑鑽', category: 'frame', rarity: 'epic', cost: 150, effect: '幾何切割黑鑽質感微光閃爍', icon: Gem },
-  { id: 'frame-koi', name: '幸運錦鯉雙色框', label: '幸運錦鯉', category: 'frame', rarity: 'common', cost: 80, effect: '綠金雙色動態邊框', icon: Clover },
-  { id: 'frame-cyber', name: '賽博霓虹閃電框', label: '賽博霓虹', category: 'frame', rarity: 'epic', cost: 120, effect: '炫彩霓虹紫光閃電效果', icon: Zap },
-  { id: 'frame-flame', name: '熱血爆發烈焰框', label: '熱血烈焰', category: 'frame', rarity: 'legendary', cost: 200, effect: '強烈視覺衝擊之動態火焰邊框', icon: Flame },
-  { id: 'badge-honest', name: '誠實開箱官 勳章', label: '誠實開箱官', category: 'badge', rarity: 'common', cost: 80, effect: '商品評價區專屬金色勳章', icon: BadgeCheck },
-  { id: 'badge-detail', name: '細節控評測家 勳章', label: '細節控評測家', category: 'badge', rarity: 'common', cost: 60, effect: '商品評價區科技藍細節標籤', icon: Search },
-  { id: 'badge-fivestar', name: '五星好評神人 勳章', label: '五星好評神人', category: 'badge', rarity: 'epic', cost: 120, effect: '評價區尊榮金光好評標籤', icon: Trophy },
-  { id: 'badge-referee', name: '公道裁判官 勳章', label: '公道裁判官', category: 'badge', rarity: 'epic', cost: 150, effect: '評價區客觀公正高權威勳章', icon: ShieldCheck },
-  { id: 'title-saver', name: '省錢王者 頭銜', label: '省錢王者', category: 'title', rarity: 'epic', cost: 150, effect: '私訊與個人中心顯示獨家亮眼標籤', icon: Coins },
-  { id: 'title-flash', name: '閃電下單達人 頭銜', label: '閃電下單達人', category: 'title', rarity: 'rare', cost: 120, effect: '個人主頁顯示誠信高質感標籤', icon: Rocket },
-  { id: 'title-cart', name: '清空購物車狂人 頭銜', label: '清空購物車狂人', category: 'title', rarity: 'common', cost: 100, effect: '社群強大購買力標籤', icon: ShoppingCart },
-  { id: 'title-hunter', name: '終極寶藏獵人 頭銜', label: '終極寶藏獵人', category: 'title', rarity: 'legendary', cost: 250, effect: '頂級活躍買家榮譽標籤', icon: Compass },
-  { id: 'skin-cyber', name: '極夜賽博朋克 Skin', label: '極夜賽博朋克', category: 'skin', rarity: 'epic', cost: 200, effect: '個人中心炫彩深色微粒背景', icon: Moon },
-  { id: 'skin-ink', name: '極簡墨炭黑金 Skin', label: '極簡墨炭黑金', category: 'skin', rarity: 'legendary', cost: 300, effect: '個人中心頂級奢華黑金暗黑主題', icon: Palette },
-]
+const PERK_ICONS = {
+  'frame-founder': Crown,
+  'frame-blackdiamond': Gem,
+  'frame-koi': Clover,
+  'frame-cyber': Zap,
+  'frame-flame': Flame,
+  'badge-honest': BadgeCheck,
+  'badge-detail': Search,
+  'badge-fivestar': Trophy,
+  'badge-referee': ShieldCheck,
+  'title-saver': Coins,
+  'title-flash': Rocket,
+  'title-cart': ShoppingCart,
+  'title-hunter': Compass,
+  'skin-cyber': Moon,
+  'skin-ink': Palette,
+  'bubble-milktea': CupSoda,
+  'bubble-memo': StickyNote,
+  'bubble-neon': MessageCircle,
+  'frame-sakura': Flower2,
+  'title-merge-boss': Store,
+  'title-street-star': Star,
+  'pet-cat': Cat,
+  'pet-shiba': Dog,
+  'pet-penguin': Bird,
+  'decor-balloon': PartyPopper,
+  'decor-neon': Lightbulb,
+  'decor-fountain': Droplets,
+  'board-wood': Grid3x3,
+  'board-arcade': Gamepad2,
+  'board-jade': Gem,
+  'scene-sakura': Flower2,
+  'scene-harbor': Sunset,
+  'scene-night': Moon,
+  'effect-snow': Snowflake,
+  'effect-hearts': Heart,
+  'effect-coins': Coins,
+  'collect-newyear': Sparkles,
+  'collect-moon': Moon,
+  'collect-snowman': Snowflake,
+  'sticker-party': Smile,
+} satisfies Record<PerkId, LucideIcon>
+
+export const PERKS: Perk[] = PERK_CATALOG.map((perk) => ({
+  ...perk,
+  icon: PERK_ICONS[perk.id],
+}))
 
 export const perkById = new Map(PERKS.map((p) => [p.id, p]))
-
-export type EquippedPerks = Partial<Record<PerkCategory, string>>

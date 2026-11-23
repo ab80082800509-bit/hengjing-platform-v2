@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { Check, Coins, Eye, Lock, Star } from 'lucide-react'
 import { UserAvatar } from '@/components/buyer-profile'
 import {
@@ -15,6 +15,10 @@ import {
   type PerkCategory,
   type PerkRarity,
 } from './perks-catalog'
+import { isPerkEquipped, perkDefinitionById } from '@/lib/rewards/perk-catalog'
+import { perkView, type MallPerkServer, type PerkView } from '@/lib/rewards/perk-mall-state'
+import { STICKERS } from '@/lib/rewards/stickers'
+import { AnimatedSticker, CollectionEmblem, PetBuddy, ProfileEffect, SceneBackdrop, StreetPerkDecor, boardClass, bubbleClass } from './perk-visuals'
 
 export interface PerkViewer {
   name: string
@@ -58,6 +62,12 @@ const FRAME_STYLE: Record<string, { ring: string; glow: string; anim: string; du
     anim: 'perk-anim-flame',
     dur: '1s',
   },
+  'frame-sakura': {
+    ring: 'conic-gradient(from 0deg, #fbcfe8, #f472b6, #fdf2f8, #ec4899, #fbcfe8, #f9a8d4, #fbcfe8)',
+    glow: 'rgba(244,114,182,.55)',
+    anim: 'perk-anim-slow',
+    dur: '3s',
+  },
 }
 
 const CHIP_STYLE: Record<string, string> = {
@@ -69,9 +79,11 @@ const CHIP_STYLE: Record<string, string> = {
   'title-flash': 'bg-sky-500/15 text-sky-200 ring-sky-400/50',
   'title-cart': 'bg-emerald-500/15 text-emerald-300 ring-emerald-400/40',
   'title-hunter': 'bg-gradient-to-r from-amber-500/30 via-yellow-300/30 to-amber-500/30 text-amber-200 ring-amber-300/70 shadow-[0_0_14px_rgba(251,191,36,.45)]',
+  'title-merge-boss': 'bg-gradient-to-r from-orange-400/30 to-rose-400/30 text-orange-100 ring-orange-300/70',
+  'title-street-star': 'bg-gradient-to-r from-yellow-300 via-amber-300 to-orange-400 text-amber-950 ring-yellow-100/70 shadow-[0_0_14px_rgba(251,191,36,.6)]',
 }
 
-const SHIMMER_IDS = new Set(['badge-fivestar', 'title-hunter', 'title-saver'])
+const SHIMMER_IDS = new Set(['badge-fivestar', 'title-hunter', 'title-saver', 'title-street-star'])
 
 const SKIN_STYLE: Record<string, CSSProperties> = {
   'skin-cyber': {
@@ -158,14 +170,73 @@ export function PerkAvatar({
 export function PerkTags({ equipped, large = false }: { equipped?: EquippedPerks; large?: boolean }) {
   const title = equipped?.title ? perkById.get(equipped.title) : undefined
   const badge = equipped?.badge ? perkById.get(equipped.badge) : undefined
-  if (!title && !badge) return null
+  const pet = equipped?.pet ? perkById.get(equipped.pet) : undefined
+  const collection = equipped?.collection ? perkById.get(equipped.collection) : undefined
+  if (!title && !badge && !pet && !collection) return null
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
+      {collection && <CollectionEmblem id={collection.id} size={large ? 24 : 18} />}
+      {pet && <PetBuddy id={pet.id} size={large ? 30 : 22} title={pet.label} />}
       {title && <PerkChip perk={title} large={large} />}
       {badge && <PerkChip perk={badge} large={large} />}
     </span>
   )
 }
+
+/** 每件商品的縮圖：商城、收藏庫與預覽共用。 */
+export function PerkArt({ perk, viewer, size = 'md' }: { perk: Perk; viewer: PerkViewer; size?: 'sm' | 'md' | 'lg' }) {
+  const px = size === 'lg' ? 1.6 : size === 'sm' ? 0.75 : 1
+  switch (perk.category) {
+    case 'frame':
+      return <FrameAvatar perkId={perk.id} viewer={viewer} size={size === 'lg' ? 'size-24' : size === 'sm' ? 'size-11' : 'size-14'} textSize={size === 'lg' ? 'text-3xl' : 'text-lg'} />
+    case 'skin':
+      return null
+    case 'bubble':
+      return (
+        <span className={`${bubbleClass(perk.id)} inline-block max-w-[90%] rounded-2xl rounded-br-md px-3 py-2 text-left text-xs`} style={{ fontSize: 12 * Math.min(px, 1.2) }}>
+          <p>請問還有現貨嗎？</p>
+          <p className="mt-0.5 text-[10px] opacity-70">10:24</p>
+        </span>
+      )
+    case 'pet':
+      return <PetBuddy id={perk.id} size={56 * px} title={perk.label} />
+    case 'decor':
+      return <StreetPerkDecor id={perk.id} style={{ width: `${(perk.id === 'decor-neon' ? 120 : 80) * px}px`, height: 'auto' }} />
+    case 'board':
+      return (
+        <span className={`${boardClass(perk.id)} grid grid-cols-4 gap-0.5 rounded-lg p-1`} style={{ width: 64 * px, height: 64 * px }} aria-label={`${perk.label}棋盤`}>
+          {Array.from({ length: 16 }, (_, i) => (
+            <span key={i} className="rounded-[3px]" style={{ background: [1, 4, 5, 10, 14].includes(i) ? ['#f97316', '#22c55e', '#3b82f6'][i % 3] : 'var(--pv-board-cell)' }} />
+          ))}
+        </span>
+      )
+    case 'scene':
+      return (
+        <span className="pv-scene-host relative block h-full w-full overflow-hidden rounded-xl">
+          <SceneBackdrop id={perk.id} />
+        </span>
+      )
+    case 'effect':
+      return (
+        <span className="relative block h-full w-full overflow-hidden rounded-xl bg-zinc-900">
+          <ProfileEffect id={perk.id} />
+          <span className="relative z-[3] flex h-full items-center justify-center">
+            <UserAvatar name={viewer.name} tone={viewer.tone} src={viewer.avatar} size="size-10" textSize="text-sm" />
+          </span>
+        </span>
+      )
+    case 'collection':
+      return <CollectionEmblem id={perk.id} size={52 * px} />
+    case 'sticker': {
+      const first = STICKERS.find((s) => s.pack === perk.id)
+      return first ? <AnimatedSticker sticker={first} small={size !== 'lg'} /> : null
+    }
+    default:
+      return <PerkChip perk={perk} large={size !== 'sm'} />
+  }
+}
+
+const FILL_STAGE = new Set(['scene', 'effect'])
 
 export function skinStyleFor(equipped?: EquippedPerks): CSSProperties | undefined {
   return equipped?.skin ? SKIN_STYLE[equipped.skin] : undefined
@@ -177,7 +248,6 @@ function stageStyle(perk: Perk): CSSProperties {
 }
 
 function PerkThumb({ perk, viewer }: { perk: Perk; viewer: PerkViewer }) {
-  if (perk.category === 'frame') return <FrameAvatar perkId={perk.id} viewer={viewer} size="size-14" />
   if (perk.category === 'skin') {
     return (
       <div className="flex items-center gap-2">
@@ -189,7 +259,16 @@ function PerkThumb({ perk, viewer }: { perk: Perk; viewer: PerkViewer }) {
       </div>
     )
   }
-  return <PerkChip perk={perk} large />
+  return <PerkArt perk={perk} viewer={viewer} />
+}
+
+function ViewBadge({ view }: { view: PerkView }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      <Lock className="size-3" aria-hidden="true" />
+      {view.note ?? view.label}
+    </span>
+  )
 }
 
 function RarityPill({ rarity }: { rarity: PerkRarity }) {
@@ -219,6 +298,10 @@ export function PerkPreviewContent({
   equipped,
   loggedIn,
   points,
+  busy = false,
+  purchaseOpen = null,
+  purchaseError = null,
+  server = null,
   onUnlock,
   onEquip,
 }: {
@@ -227,12 +310,19 @@ export function PerkPreviewContent({
   owned: boolean
   equipped: boolean
   loggedIn: boolean
-  points: number
+  points: number | null
+  busy?: boolean
+  purchaseOpen?: boolean | null
+  purchaseError?: string | null
+  server?: ReadonlyMap<string, MallPerkServer> | null
   onUnlock: () => void
   onEquip: () => void
 }) {
   const name = viewer.name || '買家'
-  const short = perk.cost - points
+  const paused = loggedIn && purchaseOpen == null
+  const def = perkDefinitionById.get(perk.id)
+  const view = def ? perkView(def, { loggedIn, owned, balance: points, purchaseOpen, paused: paused && !!purchaseError, server }) : null
+  const shownCost = view?.cost ?? perk.cost
   return (
     <div className="space-y-4 p-5">
       <div className="space-y-1.5">
@@ -323,22 +413,97 @@ export function PerkPreviewContent({
             </div>
           </div>
         )}
+
+        {perk.category === 'bubble' && (
+          <div className="w-full max-w-sm space-y-2 rounded-xl bg-white/10 p-4 text-sm">
+            <div className="flex justify-start"><span className="rounded-2xl rounded-bl-md border border-white/20 bg-white/90 px-3 py-2 text-zinc-900">這款還有黑色嗎？</span></div>
+            <div className="flex justify-end"><span className={`${bubbleClass(perk.id)} rounded-2xl rounded-br-md px-3 py-2`}><p>有喔，今天下單明天出貨</p><p className="mt-0.5 text-[10px] opacity-70">10:24</p></span></div>
+            <p className="text-center text-[11px] text-zinc-300">買家與賣家聊天時，對方也看得到你的氣泡</p>
+          </div>
+        )}
+
+        {(perk.category === 'pet' || perk.category === 'collection') && (
+          <div className="w-full max-w-sm space-y-3">
+            <div className="flex items-center justify-center"><PerkArt perk={perk} viewer={viewer} size="lg" /></div>
+            <div className="flex items-center gap-2 rounded-xl bg-white/10 p-3">
+              <UserAvatar name={viewer.name} tone={viewer.tone} src={viewer.avatar} size="size-9" textSize="text-sm" />
+              <p className="flex items-center gap-1.5 text-sm font-black">
+                {name}
+                {perk.category === 'pet' ? <PetBuddy id={perk.id} size={24} /> : <CollectionEmblem id={perk.id} size={20} />}
+              </p>
+              <span className="ml-auto text-[11px] text-zinc-300">聊天與成就牆</span>
+            </div>
+          </div>
+        )}
+
+        {perk.category === 'decor' && (
+          <div className="relative flex h-36 w-full max-w-sm items-end justify-center overflow-hidden rounded-xl bg-gradient-to-b from-sky-300 to-sky-100">
+            <span className="absolute inset-x-0 bottom-0 h-8 bg-stone-400" />
+            <StreetPerkDecor id={perk.id} className="relative" style={{ width: perk.id === 'decor-neon' ? 200 : 130, marginBottom: perk.id === 'decor-neon' ? 60 : 8 }} />
+          </div>
+        )}
+
+        {perk.category === 'board' && (
+          <div className="flex flex-col items-center gap-2">
+            <PerkArt perk={perk} viewer={viewer} size="lg" />
+            <p className="text-[11px] text-zinc-300">方塊大挑戰的棋盤外觀</p>
+          </div>
+        )}
+
+        {(perk.category === 'scene' || perk.category === 'effect') && (
+          <div className="relative h-40 w-full max-w-sm overflow-hidden rounded-xl">
+            {perk.category === 'scene' ? (
+              <span className="pv-scene-host absolute inset-0"><SceneBackdrop id={perk.id} /></span>
+            ) : (
+              <span className="absolute inset-0 bg-zinc-900"><ProfileEffect id={perk.id} interactive /></span>
+            )}
+            <span className="pointer-events-none absolute left-3 top-3 z-[3] rounded-full bg-black/40 px-2 py-0.5 text-[11px]">
+              {perk.category === 'scene' ? '遊樂園、合成小舖與方塊大挑戰背景' : '個人頁與成就牆・點一下試試'}
+            </span>
+          </div>
+        )}
+
+        {perk.category === 'sticker' && (
+          <div className="grid grid-cols-3 gap-2">
+            {STICKERS.filter((s) => s.pack === perk.id).map((s) => <AnimatedSticker key={s.id} sticker={s} small />)}
+          </div>
+        )}
       </div>
+
+      {def?.unlock && (
+        <p className="rounded-xl bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          解鎖條件：{view?.kind === 'locked' && view.note ? view.note : `達成後才能兌換`}
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="inline-flex items-center gap-1.5 text-sm font-black text-brand-ink">
           <Coins className="size-4" aria-hidden="true" />
-          {perk.cost} 點
+          {shownCost} 點
         </p>
-        {owned ? (
-          <button type="button" onClick={onEquip} aria-pressed={equipped} className={equipped ? btnGhost : btnPrimary}>
+        {owned && perk.category === 'sticker' ? (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-500"><Check className="size-3.5" aria-hidden="true" />已擁有・在聊天的貼圖按鈕使用</span>
+        ) : owned ? (
+          <button type="button" onClick={onEquip} disabled={busy} aria-pressed={equipped} className={equipped ? btnGhost : btnPrimary}>
             <Check className="size-3.5" aria-hidden="true" />
             {equipped ? '已裝備（點此卸下）' : '立即裝備'}
           </button>
+        ) : purchaseOpen === false ? (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-muted-foreground">
+            <Lock className="size-3.5" aria-hidden="true" />兌換尚未開放
+          </span>
+        ) : paused && purchaseError ? (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-muted-foreground">
+            <Lock className="size-3.5" aria-hidden="true" />暫停兌換：{purchaseError}
+          </span>
+        ) : loggedIn && view && !view.canBuy && view.kind !== 'short' && view.kind !== 'loading' ? (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-muted-foreground">
+            <Lock className="size-3.5" aria-hidden="true" />{view.label}{view.note ? `：${view.note}` : ''}
+          </span>
         ) : (
           <div className="flex items-center gap-3">
-            {loggedIn && short > 0 && <span className="text-xs text-muted-foreground">還差 {short} 點</span>}
-            <button type="button" onClick={onUnlock} className={btnPrimary}>
+            {loggedIn && view?.kind === 'short' && view.note && <span className="text-xs text-muted-foreground">{view.note}</span>}
+            <button type="button" onClick={onUnlock} disabled={busy || paused || (loggedIn && !view?.canBuy)} className={btnPrimary}>
               <Coins className="size-3.5" aria-hidden="true" />
               用點數解鎖
             </button>
@@ -354,11 +519,13 @@ function EquipStrip({
   owned,
   equipped,
   points,
+  extra,
 }: {
   viewer: PerkViewer
   owned: string[]
   equipped: EquippedPerks
-  points: number
+  points: number | null
+  extra?: ReactNode
 }) {
   const frame = equipped.frame ? perkById.get(equipped.frame) : undefined
   const badge = equipped.badge ? perkById.get(equipped.badge) : undefined
@@ -367,10 +534,11 @@ function EquipStrip({
   const name = viewer.name || '買家'
   return (
     <div
-      className={`flex flex-wrap items-center gap-4 rounded-2xl p-4 ring-1 ring-border/70 ${skin ? 'text-white' : 'bg-muted/40'}`}
+      className={`relative flex flex-wrap items-center gap-4 overflow-hidden rounded-2xl p-4 ring-1 ring-border/70 ${skin ? 'text-white' : 'bg-muted/40'}`}
       style={skin}
       aria-label="我的裝備"
     >
+      <ProfileEffect id={equipped.effect} interactive />
       {frame ? (
         <FrameAvatar perkId={frame.id} viewer={viewer} size="size-14" />
       ) : (
@@ -379,8 +547,11 @@ function EquipStrip({
       <div className="min-w-0 flex-1 space-y-1.5">
         <p className="flex flex-wrap items-center gap-1.5 text-sm font-black">
           <span className="truncate">{name}</span>
+          <CollectionEmblem id={equipped.collection} size={20} />
+          <PetBuddy id={equipped.pet} size={26} />
           {badge && <PerkChip perk={badge} />}
           {title && <PerkChip perk={title} />}
+          {extra}
         </p>
         <p className={`text-xs ${skin ? 'text-zinc-300' : 'text-muted-foreground'}`}>
           {owned.length === 0 ? '尚未解鎖任何特權，解鎖後可在這裡裝備，並顯示在評價區與個人中心' : `已解鎖 ${owned.length} / ${PERKS.length} 件收藏品`}
@@ -388,7 +559,7 @@ function EquipStrip({
       </div>
       <p className={`inline-flex items-center gap-1.5 text-sm font-black ${skin ? 'text-amber-300' : 'text-brand-ink'}`}>
         <Coins className="size-4" aria-hidden="true" />
-        {points} 點
+        {points == null ? '讀取中' : `${points} 點`}
       </p>
     </div>
   )
@@ -406,23 +577,36 @@ export function PerksPanel({
   owned,
   equipped,
   viewer,
+  busy = false,
+  purchaseOpen = null,
+  purchaseError = null,
+  server = null,
   onPreview,
   onUnlock,
   onEquip,
 }: {
   loggedIn: boolean
-  points: number
+  points: number | null
   owned: string[]
   equipped: EquippedPerks
   viewer: PerkViewer
+  busy?: boolean
+  purchaseOpen?: boolean | null
+  purchaseError?: string | null
+  server?: ReadonlyMap<string, MallPerkServer> | null
   onPreview: (id: string) => void
   onUnlock: (id: string) => void
   onEquip: (id: string) => void
 }) {
+  const paused = loggedIn && purchaseOpen == null
   const [category, setCategory] = useState<PerkCategory | 'all'>('all')
   const [rarity, setRarity] = useState<PerkRarity | 'all'>('all')
+  const [mineOnly, setMineOnly] = useState(false)
 
-  const byRarity = useMemo(() => PERKS.filter((p) => rarity === 'all' || p.rarity === rarity), [rarity])
+  const byRarity = useMemo(
+    () => PERKS.filter((p) => (rarity === 'all' || p.rarity === rarity) && (!mineOnly || owned.includes(p.id))),
+    [rarity, mineOnly, owned],
+  )
   const visible = useMemo(() => byRarity.filter((p) => category === 'all' || p.category === category), [byRarity, category])
   const countOf = (c: PerkCategory) => byRarity.filter((p) => p.category === c).length
 
@@ -430,12 +614,35 @@ export function PerksPanel({
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-black">尊榮頭銜與特權</h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">用簽到點數解鎖頭像框、評價勳章、頭銜與主題，收集你的專屬風格</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">用會員點數兌換頭像框、勳章、頭銜、主題、聊天氣泡、寵物、街景裝潢、方塊棋盤、遊戲場景、個人頁特效與節慶收藏。動態貼圖登入聊天即可使用，不另扣點。兌換後進入收藏庫，重新登入仍在</p>
       </div>
 
       <EquipStrip viewer={viewer} owned={owned} equipped={equipped} points={points} />
 
+      {purchaseOpen === false && (
+        <p className="flex items-start gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs font-bold leading-relaxed">
+          <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          虛擬特權兌換尚未開放，畫面點數為規劃價、尚待核准。已擁有的收藏可照常裝備與卸下。
+        </p>
+      )}
+      {paused && purchaseError && (
+        <p role="alert" className="flex items-start gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 p-3 text-xs font-bold leading-relaxed">
+          <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          暫停兌換：{purchaseError}。這不是點數不足，也不是兌換關閉；點數沒有變動。
+        </p>
+      )}
+
       <div className="space-y-2.5">
+        {loggedIn && (
+          <div className="flex flex-wrap gap-2" role="group" aria-label="收藏篩選">
+            <button type="button" aria-pressed={!mineOnly} onClick={() => setMineOnly(false)} className={filterChip(!mineOnly)}>
+              全部特權
+            </button>
+            <button type="button" aria-pressed={mineOnly} onClick={() => setMineOnly(true)} className={filterChip(mineOnly)}>
+              我擁有的 ({owned.length})
+            </button>
+          </div>
+        )}
         <div className="flex flex-wrap gap-2" role="group" aria-label="分類篩選">
           <button type="button" aria-pressed={category === 'all'} onClick={() => setCategory('all')} className={filterChip(category === 'all')}>
             全部 ({byRarity.length})
@@ -469,16 +676,20 @@ export function PerksPanel({
       </div>
 
       {visible.length === 0 ? (
-        <p className="rounded-2xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">這個篩選條件下沒有品項</p>
+        <p className="rounded-2xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+          {mineOnly && owned.length === 0 ? '還沒有擁有任何特權。兌換後會永久保存在這裡' : '這個篩選條件下沒有品項'}
+        </p>
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {visible.map((p) => {
             const isOwned = owned.includes(p.id)
-            const isEquipped = equipped[p.category] === p.id
-            const short = p.cost - points
+            const isEquipped = isPerkEquipped(equipped, p)
+            const def = perkDefinitionById.get(p.id)
+            const view = def ? perkView(def, { loggedIn, owned: isOwned, balance: points, purchaseOpen, paused: paused && !!purchaseError, server }) : null
+            const blocked = loggedIn && view && !view.canBuy && !isOwned
             return (
               <li key={p.id} className={`flex flex-col gap-3 rounded-2xl border bg-card p-3 ${RARITY_META[p.rarity].card}`}>
-                <div className="flex h-28 items-center justify-center overflow-hidden rounded-xl" style={stageStyle(p)}>
+                <div className={`flex h-28 items-center justify-center overflow-hidden rounded-xl ${FILL_STAGE.has(p.category) ? '!items-stretch !justify-stretch' : ''}`} style={stageStyle(p)}>
                   <PerkThumb perk={p} viewer={viewer} />
                 </div>
                 <div className="flex items-center justify-between gap-2">
@@ -492,34 +703,49 @@ export function PerksPanel({
                 <div className="flex items-center justify-between gap-2">
                   <p className="inline-flex items-center gap-1 text-sm font-black text-brand-ink">
                     <Coins className="size-4" aria-hidden="true" />
-                    {p.cost} 點
+                    {view?.cost ?? p.cost} 點
                   </p>
                   {isOwned ? (
                     <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-400">
-                      <Check className="size-3.5" aria-hidden="true" />已擁有
+                      <Check className="size-3.5" aria-hidden="true" />{p.category === 'sticker' ? '聊天可用' : isEquipped ? '裝備中' : '已擁有'}
                     </span>
-                  ) : loggedIn && short > 0 ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <Lock className="size-3" aria-hidden="true" />還差 {short} 點
-                    </span>
+                  ) : loggedIn && view && (view.note || view.kind === 'short') && purchaseOpen === true ? (
+                    <ViewBadge view={view} />
                   ) : null}
                 </div>
                 <div className="mt-auto grid grid-cols-2 gap-2">
                   <button type="button" onClick={() => onPreview(p.id)} className={btnGhost}>
                     <Eye className="size-3.5" aria-hidden="true" />即時預覽
                   </button>
-                  {isOwned ? (
+                  {isOwned && p.category === 'sticker' ? (
+                    <span className="inline-flex items-center justify-center gap-1 rounded-full border border-emerald-500/40 px-3 py-2 text-xs font-bold text-emerald-500">
+                      <Check className="size-3" aria-hidden="true" />已擁有
+                    </span>
+                  ) : isOwned ? (
                     <button
                       type="button"
                       onClick={() => onEquip(p.id)}
+                      disabled={busy}
                       aria-pressed={isEquipped}
                       className={isEquipped ? `${btnGhost} border-primary text-brand-ink` : btnPrimary}
                     >
                       <Check className="size-3.5" aria-hidden="true" />
-                      {isEquipped ? '已裝備' : '裝備'}
+                      {isEquipped ? '卸下' : '裝備'}
                     </button>
+                  ) : purchaseOpen === false ? (
+                    <span className="inline-flex items-center justify-center gap-1 rounded-full border border-dashed border-border px-3 py-2 text-xs font-bold text-muted-foreground">
+                      <Lock className="size-3" aria-hidden="true" />兌換未開放
+                    </span>
+                  ) : paused ? (
+                    <span className="inline-flex items-center justify-center gap-1 rounded-full border border-dashed border-border px-3 py-2 text-xs font-bold text-muted-foreground">
+                      <Lock className="size-3" aria-hidden="true" />{purchaseError ? '暫停兌換' : '讀取中'}
+                    </span>
+                  ) : blocked && view.kind !== 'short' ? (
+                    <span className="inline-flex items-center justify-center gap-1 rounded-full border border-dashed border-border px-3 py-2 text-xs font-bold text-muted-foreground">
+                      <Lock className="size-3" aria-hidden="true" />{view.label}
+                    </span>
                   ) : (
-                    <button type="button" onClick={() => onUnlock(p.id)} className={btnPrimary}>
+                    <button type="button" onClick={() => onUnlock(p.id)} disabled={busy || !!blocked} className={btnPrimary}>
                       <Coins className="size-3.5" aria-hidden="true" />用點數解鎖
                     </button>
                   )}
@@ -531,8 +757,95 @@ export function PerksPanel({
       )}
 
       <p className="rounded-2xl bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
-        頭銜與特權皆為虛擬外觀收藏品，以平台簽到點數解鎖後永久擁有，不可轉讓、退換或兌換現金；同一類別一次只能裝備一件。
+        頭銜與特權皆為虛擬外觀收藏品，以會員點數帳本扣點後永久擁有，不可轉讓、退換或兌換現金；同一類別一次只能裝備一件。
       </p>
     </div>
+  )
+}
+
+export function MyPerksPanel({
+  owned,
+  equipped,
+  viewer,
+  points,
+  busy = false,
+  onEquip,
+  onOpenShop,
+  extra,
+}: {
+  owned: string[]
+  equipped: EquippedPerks
+  viewer: PerkViewer
+  points: number | null
+  busy?: boolean
+  onEquip: (id: string) => void
+  onOpenShop: () => void
+  /** 已持有的頭銜旁邊，一併顯示會員自己公開的遊戲成就。 */
+  extra?: ReactNode
+}) {
+  const mine = PERKS.filter((p) => owned.includes(p.id))
+  return (
+    <section className="space-y-4" aria-label="我的特權">
+      <EquipStrip viewer={viewer} owned={owned} equipped={equipped} points={points} extra={extra} />
+      {mine.length === 0 ? (
+        <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border py-12 text-center">
+          <Lock className="size-10 text-border" aria-hidden="true" />
+          <p className="text-sm text-muted-foreground">還沒有擁有任何虛擬特權。兌換後會永久保存在這裡，可隨時裝備或卸下。</p>
+          <button type="button" onClick={onOpenShop} className={btnPrimary}>
+            <Eye className="size-3.5" aria-hidden="true" />查看全部 {PERKS.length} 件特權
+          </button>
+        </div>
+      ) : (
+        CATEGORY_ORDER.map((c) => {
+          const items = mine.filter((p) => p.category === c)
+          return (
+            <div key={c} className="space-y-2">
+              <h3 className="flex flex-wrap items-baseline justify-between gap-2 text-sm font-black">
+                {CATEGORY_META[c].label}
+                <span className="text-[11px] font-medium text-muted-foreground">顯示於{CATEGORY_META[c].place}{c === 'sticker' ? '・擁有即可使用' : '・同類一次裝備一件'}</span>
+              </h3>
+              {items.length === 0 ? (
+                <p className="rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">這一類還沒有收藏</p>
+              ) : (
+                <ul className="grid gap-2 sm:grid-cols-2">
+                  {items.map((p) => {
+                    const on = isPerkEquipped(equipped, p)
+                    return (
+                      <li key={p.id} className={`flex items-center gap-3 rounded-2xl border bg-card p-2.5 ${RARITY_META[p.rarity].card}`}>
+                        <div className={`flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl ${FILL_STAGE.has(p.category) ? '!items-stretch !justify-stretch' : ''}`} style={stageStyle(p)}>
+                          <PerkArt perk={p} viewer={viewer} size="sm" />
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <p className="truncate text-sm font-black">{p.label}</p>
+                          <RarityPill rarity={p.rarity} />
+                        </div>
+                        {p.category === 'sticker' ? (
+                          <span className="text-xs font-bold text-emerald-500">聊天可用</span>
+                        ) : <button
+                          type="button"
+                          onClick={() => onEquip(p.id)}
+                          disabled={busy}
+                          aria-pressed={on}
+                          className={on ? `${btnGhost} border-primary text-brand-ink` : btnPrimary}
+                        >
+                          <Check className="size-3.5" aria-hidden="true" />
+                          {on ? '卸下' : '裝備'}
+                        </button>}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          )
+        })
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-muted/50 p-3 text-xs text-muted-foreground">
+        <span>收藏永久保存在會員帳號，重新登入或換裝置都在；不可轉讓、退換或兌換現金。</span>
+        {mine.length > 0 && (
+          <button type="button" onClick={onOpenShop} className={`${btnGhost} px-3 py-1.5`}>查看全部特權</button>
+        )}
+      </div>
+    </section>
   )
 }

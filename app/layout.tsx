@@ -2,6 +2,8 @@ import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { Noto_Sans_TC } from 'next/font/google'
 import { PwaRegister } from '@/components/pwa-register'
+import { FestivalAmbience } from '@/components/festival/festival-ambience'
+import { FestivalPreviewNotice } from '@/components/festival/festival-admin-preview'
 import './globals.css'
 
 const notoSansTC = Noto_Sans_TC({
@@ -51,6 +53,8 @@ export default function RootLayout({
     <html lang="zh-Hant" className={`bg-background ${notoSansTC.variable}`}>
       <body className="font-sans antialiased">
         {children}
+        <FestivalAmbience />
+        <FestivalPreviewNotice />
         <PwaRegister />
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
